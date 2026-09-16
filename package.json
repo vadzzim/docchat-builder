@@ -2,6 +2,7 @@
   "name": "docchat",
   "version": "0.1.0",
   "private": true,
+  "packageManager": "pnpm@10.30.3",
   "scripts": {
     "dev": "next dev",
     "build": "next build",
@@ -13,7 +14,9 @@
     "test:ingestion": "node scripts/ingestion-integration.mjs",
     "test:chat": "node scripts/chat-integration.mjs",
     "test:billing": "node scripts/billing-integration.mjs",
-    "test:cleanup": "node scripts/cleanup-integration.mjs"
+    "test:cleanup": "node scripts/cleanup-integration.mjs",
+    "test:browser": "node scripts/browser-smoke.mjs",
+    "test:model": "node scripts/model-comparison.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "2.116.0",
@@ -23,6 +26,7 @@
     "zod": "4.1.5"
   },
   "devDependencies": {
+    "@playwright/test": "1.62.1",
     "@types/node": "24.3.0",
     "@types/react": "19.2.14",
     "@types/react-dom": "19.2.3",

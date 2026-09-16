@@ -1,0 +1,60 @@
+# Validation record
+
+This record describes the local MVP checks run on 2026-09-16. Accounts, bot names, documents, and support policies used in the checks are synthetic. Runtime keys were read by scripts but were never printed or put in browser environment files.
+
+## End-to-end behavior
+
+- Email sign-up created an unconfirmed Supabase user with no session. Mailpit received the confirmation message; confirmation, sign-in, forgot-password, recovery, reused-link, expired-link, and literal-percent callback cases were exercised. Recovery links never exposed a password form after an invalid or reused link.
+- An isolated owner created one bot, uploaded `shipping.md`, `returns.txt`, and `support.md`, and processed all three through Storage, the Edge Functions, Ollama `bge-m3`, and Postgres. Owner chat streamed a grounded shipping answer containing `$8`, `3–5 business days`, and source details; reload restored the ordered conversation history. The no-phone question returned the insufficient-information sentinel with no citations.
+- The visitor flow created two origin-bound sessions for a published bot. A visitor received the same real retrieval and streaming path without an owner bearer header. A session could not use another visitor's conversation, an owner could not read visitor messages through RLS, and unpublishing immediately blocked an existing token.
+- Mock Free → Pro → Free changes preserved the monthly usage row and all three ready documents. A failed post-mutation usage read still showed the committed plan and a truthful refresh warning.
+- The owner deletion journey cancelled safely, deleted the bot and its documents/chunks, left the account, and invalidated old visitor tokens. The settings action requires an explicit confirmation.
+
+## Security and isolation
+
+- All 12 public application tables have RLS enabled. Anonymous access has no table grants; authenticated users have only the intended owner reads. New privileged RPCs (`set_mock_account_plan`, deletion/cleanup lease functions, enqueue, and cleanup functions) deny `anon` and `authenticated` execution and allow the service role only.
+- A second tenant saw no first-tenant bots. Foreign bot settings, owner chat, document operations, plan changes, and visitor conversations were denied. Caller-supplied account IDs cannot redirect an owner operation to another account.
+- Source files stay in a private Storage bucket. Widget sessions return safe bot presentation fields only; source excerpts are returned only for the selected authorized bot. Visitor tokens are random 256-bit values stored as server-side hashes, expire after 24 hours, and are checked against bot, origin, and current publication on every chat.
+- The loader obtains the public session from the embedding page's actual HTTP `Origin`, and the iframe accepts the token only from the exact expected parent source and origin. Visitor fetches contain no owner `Authorization` header. Public request IP limiting uses the local Kong `X-Real-IP` trust boundary and ignores spoofable `X-Forwarded-For` values.
+- Direct browser calls to service-only quota, plan, deletion, and cleanup RPCs were denied. Account and bot locks serialize plan, slot, quota, and deletion decisions.
+
+## Ingestion and race handling
+
+- Valid TXT/Markdown, empty, malformed UTF-8, non-supported extension, and over-100 KiB files were exercised. A valid 100 KiB ASCII source produced exactly 197 chunks and 1024-dimensional vectors; processing took about 84.5 seconds on the local machine. A 100 KiB UTF-8 Chinese source also produced 197 byte-bounded chunks and completed in about 81.4 seconds. Every chunk stayed within the 600-byte source budget, and a fact near the final chunk was retrieved with its supporting excerpt.
+- Partial chunks never participated in retrieval. Repeated processing of a ready document was idempotent. Expired leases could retry with a new generation; stale workers could neither insert chunks nor finalize a deleted or superseded document. The exact document ID, generation, active row, lease, and expected chunk count are required at atomic finalization.
+- Upload compensation uses a fresh bounded cleanup client if a deadline fires during Storage or database cleanup. Processing failure writes and rate lease release use the same independent short cleanup deadline. Delete clears retrieval immediately and retains a durable tombstone for failed or late Storage cleanup.
+- The controlled document-lock versus bot-delete regression completed with both operations succeeding, verifying the lock order does not deadlock. A simulated lost delete RPC response kept the cleanup state pending and allowed the endpoint retry to remove the still-present object. An aged tombstone retry removed both its late-uploaded object and marker; young tombstones were skipped.
+
+## Chat, quota, and transport
+
+- Chat validates access, input, ready knowledge, and conversation ownership before reserving monthly quota. The shared account allowance is reserved immediately before query embedding, so rejected requests do not charge; dispatched provider failures and disconnects do charge. Owner and visitor usage shared one monthly row.
+- Actor and bot request/concurrency leases are acquired before history and model work and are released with their exact lease IDs. Invalid visitor tokens are rate-limited before token lookup. Quota and concurrency boundary checks passed with parallel requests allowing only the configured count.
+- The SSE protocol uses `meta`, token events, and a terminal `done` event. Malformed, provider-error, missing-done, truncated, and disconnected streams fail visibly and do not save a partial assistant answer as a completed exchange. The automated browser check injects a CORS-valid token event without `done`, verifies that the partial text renders, and then asserts the incomplete/error state.
+- The current small model can make conditional-policy mistakes and may answer a Russian question in English. The UI displays retrieved source excerpts as evidence and does not claim that model citations are mechanically verified.
+
+## Billing, deletion, retention, and scheduling
+
+- Mock billing accepts only `free` or `pro`, derives the account from the verified user, and changes no usage, data, or files. Free limits are 5 documents/500 KiB/100 requests per UTC month; Pro limits are 25/2,500 KiB/1,000 requests. A six-document Pro fixture survived downgrade; new Free uploads were blocked at the cap and succeeded after enough documents were deleted.
+- Bot deletion invalidates conversations, sessions, documents, chunks, and storage paths while preserving the account. Storage failure testing was performed against the local Storage service: the source and tombstone remained after the outage, then a restart and an explicit cleanup retry removed both. The scheduled cron path was verified separately below.
+- Messages older than 30 days are removed independently of conversation activity. Recent conversations that still reference an expired visitor session remain until their messages age out; only then can the expired session be deleted. A daily 03:00 UTC cleanup remains scheduled.
+- The real minute `pg_cron` job invoked the internal Kong cleanup endpoint and returned HTTP 200 with `{ processed: 15, removed: 15, failed: 0, timed_out: false }`. The job uses a Vault-held secret, a single cleanup lease, an at-least-five-minute tombstone grace period, bounded batches, and no bucket-wide deletion.
+
+## UI and widget checks
+
+- Root browser checks covered 320px and 390px layouts, no horizontal overflow, keyboard tab selection, Enter-to-send, visible scrolling transcript/composer, source details, Escape close and focus return, preserved hidden widget transcript, head-placed loader scripts, exact origin rejection, token recovery without reusing the old conversation, and custom grey accent text with sufficient black contrast.
+- The landing page shows the actual Free and illustrative Pro limits and says that local plan changes are mock and uncharged. Settings explains that publishing exposes answers and cited excerpts while original files remain private; origins supplement server-side controls.
+- The safe demo server serves only the synthetic Northstar page at port 3001 and rejects arbitrary filesystem paths. Ten production-build screenshots were captured, visually checked, and included in [WALKTHROUGH.md](WALKTHROUGH.md).
+
+## Real failures versus injected checks
+
+The Ollama-unreachable test was a real provider transport failure: the Edge Function returned `provider_unavailable`, retained no incomplete answer, and counted the dispatched request. The Storage outage test stopped only the local Storage service for the isolated fixture; recovery and tombstone retry were then verified. Browser transport aborts, failed history reads, and the final automated truncated-SSE check intentionally use Playwright routing; they do not represent an Ollama outage. An earlier 502 during a multilingual processing run occurred while the Edge Functions development process hot-reloaded; the stable retry completed in about 81.4 seconds.
+
+## Reproducible checks
+
+The production build and TypeScript check passed. The ingestion, chat, billing, and cleanup integration runners passed against actual local services. The final browser runner passed fresh signup and Mailpit confirmation, three real uploads, owner chat/history, mock plan preservation, publishing, external widget token isolation, the injected missing-`done` stream, unpublishing, deletion, and fixture cleanup. The model runner completed all 15 questions for both models; completion does not imply answer correctness. Script syntax and `git diff --check` passed. Independent reviews accepted the implementation slices and the final verification scripts.
+
+## Limits of this evidence
+
+This validation does not cover cloud/OpenRouter credentials, production SMTP, Vercel deployment, Stripe payments, or production proxy configuration. Local mock billing is not a payment integration. The selected `qwen3:0.6b` model is small and has documented semantic and language limitations; the model comparison is evidence for local configuration, not a quality guarantee. Production deployment requires rechecking provider policy, quotas, origins, secrets, latency, and model quality.
+
+Ingestion runs synchronously with a 110-second request deadline and a 180-second processing lease. The maximum-size files took 81–85 seconds on this hardware; slower machines may require retry after lease expiry. There is no durable background queue. Local Docker forwarding can aggregate client addresses for IP limits; a deployment must validate its own trusted proxy header chain.

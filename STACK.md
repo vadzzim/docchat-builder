@@ -7,7 +7,7 @@ Technical decisions for the project. Original requirements are in [BRIEF.md](BRI
 | Area | Choice | Purpose |
 | --- | --- | --- |
 | Application | Next.js App Router + TypeScript | Landing page, dashboard, and chat interface |
-| UI | Tailwind CSS + three small native primitives | Styling and basic controls (Button, Card, Input) |
+| UI | Tailwind CSS + three small native primitives | Styling and basic controls (`Button`, `Card`, `Input`); no shadcn dependency is needed |
 | Server logic | Supabase Edge Functions | Document processing, chat, limit enforcement, and billing |
 | Database | Supabase Postgres + pgvector | Product data, document chunks, and vector search |
 | Authentication | Supabase Auth | Registration and sign-in |
