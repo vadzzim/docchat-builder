@@ -137,7 +137,7 @@ jobs:
           }
           trap cleanup EXIT
 
-          npx --yes supabase@${SUPABASE_CLI_VERSION} start --ignore-health-check -x analytics,vector,logflare,imgproxy,realtime,supavisor,edge-runtime >test-results/supabase-start.log 2>&1
+          npx --yes supabase@${SUPABASE_CLI_VERSION} start --ignore-health-check -x vector,logflare,imgproxy,realtime,supavisor,edge-runtime >test-results/supabase-start.log 2>&1
           npx --yes supabase@${SUPABASE_CLI_VERSION} migration up --local >test-results/supabase-migration.log 2>&1
           pnpm setup:local >test-results/local-setup.log 2>&1
 
@@ -179,9 +179,9 @@ jobs:
             "$provider_url" >>.env.functions.local
           npx --yes supabase@${SUPABASE_CLI_VERSION} functions serve --env-file .env.functions.local >test-results/functions.log 2>&1 &
           functions_pid=$!
-          for attempt in $(seq 1 60); do
+          for attempt in $(seq 1 150); do
             if curl --silent --fail --output /dev/null -X OPTIONS "$api_url/functions/v1/chat" -H 'Origin: http://127.0.0.1:3000'; then break; fi
-            if [[ "$attempt" == 60 ]]; then exit 1; fi
+            if [[ "$attempt" == 150 ]]; then exit 1; fi
             sleep 2
           done
 
