@@ -25,9 +25,12 @@ function validateEmbeddings(value: unknown): number[][] {
   return result;
 }
 
-export async function embed(input: string | string[]): Promise<number[][]> {
+export async function embed(input: string | string[], parentSignal?: AbortSignal): Promise<number[][]> {
   const values = Array.isArray(input) ? input : [input];
   const controller = new AbortController();
+  const abortFromParent = () => controller.abort();
+  if (parentSignal?.aborted) controller.abort();
+  else parentSignal?.addEventListener("abort", abortFromParent, { once: true });
   const timer = setTimeout(() => controller.abort(), 60000);
   try {
     const response = await fetch(baseUrl + "/api/embed", {
@@ -42,6 +45,7 @@ export async function embed(input: string | string[]): Promise<number[][]> {
     return result;
   } finally {
     clearTimeout(timer);
+    parentSignal?.removeEventListener("abort", abortFromParent);
   }
 }
 

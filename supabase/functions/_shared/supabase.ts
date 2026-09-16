@@ -5,11 +5,20 @@ const supabaseUrl = Deno.env.get("SUPABASE_URL") ?? "";
 const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
 const anonKey = Deno.env.get("SUPABASE_ANON_KEY") ?? Deno.env.get("SUPABASE_PUBLISHABLE_KEY") ?? serviceRoleKey;
 
-export function createAdminClient(): SupabaseClient {
-  if (!supabaseUrl || !serviceRoleKey) throw new Error("Supabase server configuration is missing.");
-  return createClient(supabaseUrl, serviceRoleKey, {
-    auth: { autoRefreshToken: false, persistSession: false },
+function fetchWithSignal(signal: AbortSignal): typeof fetch {
+  return (input, init) => fetch(input, {
+    ...init,
+    signal: init?.signal ? AbortSignal.any([signal, init.signal]) : signal,
   });
+}
+
+export function createAdminClient(signal?: AbortSignal): SupabaseClient {
+  if (!supabaseUrl || !serviceRoleKey) throw new Error("Supabase server configuration is missing.");
+  const options = {
+    auth: { autoRefreshToken: false, persistSession: false },
+    ...(signal ? { global: { fetch: fetchWithSignal(signal) } } : {}),
+  };
+  return createClient(supabaseUrl, serviceRoleKey, options);
 }
 
 export function bearerToken(request: Request): string | null {
@@ -18,18 +27,21 @@ export function bearerToken(request: Request): string | null {
   return match?.[1]?.trim() || null;
 }
 
-export async function requireUser(request: Request): Promise<{ user: User; admin: SupabaseClient }> {
+export async function requireUser(request: Request, signal?: AbortSignal): Promise<{ user: User; admin: SupabaseClient }> {
   const token = bearerToken(request);
   if (!token) throw new HttpError(401, "Sign in is required.", "unauthorized");
   if (!supabaseUrl || !anonKey) throw new Error("Supabase auth configuration is missing.");
 
   const userClient = createClient(supabaseUrl, anonKey, {
     auth: { autoRefreshToken: false, persistSession: false },
-    global: { headers: { Authorization: "Bearer " + token } },
+    global: {
+      headers: { Authorization: "Bearer " + token },
+      ...(signal ? { fetch: fetchWithSignal(signal) } : {}),
+    },
   });
   const { data, error } = await userClient.auth.getUser();
   if (error || !data.user) throw new HttpError(401, "Your session is no longer valid.", "unauthorized");
-  return { user: data.user, admin: createAdminClient() };
+  return { user: data.user, admin: createAdminClient(signal) };
 }
 
 export async function sha256Hex(value: string): Promise<string> {
@@ -49,4 +61,3 @@ export function clientIp(request: Request): string {
   const forwarded = request.headers.get("x-forwarded-for")?.split(",")[0]?.trim();
   return forwarded || request.headers.get("x-real-ip")?.trim() || "unknown";
 }
-

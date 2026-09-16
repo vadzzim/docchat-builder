@@ -71,3 +71,58 @@ export function requirePost(request: Request): void {
   if (request.method !== "POST") throw new HttpError(405, "Method not allowed", "method_not_allowed");
 }
 
+export async function readBoundedBody(
+  request: Request,
+  maxBytes: number,
+  signal?: AbortSignal,
+  timeoutMilliseconds = 30000,
+): Promise<Uint8Array> {
+  const contentLength = Number(request.headers.get("content-length") ?? 0);
+  if (Number.isFinite(contentLength) && contentLength > maxBytes) {
+    throw new HttpError(413, "Upload request is too large.", "payload_too_large");
+  }
+  if (signal?.aborted) throw new HttpError(408, "Upload request timed out.", "request_timeout");
+  if (!request.body) return new Uint8Array();
+  const reader = request.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  let timedOut = false;
+  const timeout = setTimeout(() => {
+    timedOut = true;
+    void reader.cancel("request body timeout");
+  }, timeoutMilliseconds);
+  const abort = () => void reader.cancel(signal?.reason);
+  signal?.addEventListener("abort", abort, { once: true });
+  try {
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      if (signal?.aborted) throw new HttpError(408, "Upload request timed out.", "request_timeout");
+      total += value.byteLength;
+      if (total > maxBytes) {
+        await reader.cancel();
+        throw new HttpError(413, "Upload request is too large.", "payload_too_large");
+      }
+      chunks.push(value);
+    }
+    if (timedOut || signal?.aborted) {
+      throw new HttpError(408, "Upload request timed out.", "request_timeout");
+    }
+  } catch (error) {
+    if (timedOut || signal?.aborted) {
+      throw new HttpError(408, "Upload request timed out.", "request_timeout");
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+    signal?.removeEventListener("abort", abort);
+    reader.releaseLock();
+  }
+  const body = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    body.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return body;
+}

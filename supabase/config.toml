@@ -28,3 +28,9 @@ enable_confirmations = true
 verify_jwt = false
 [functions.bot-settings]
 verify_jwt = false
+[functions.upload-document]
+verify_jwt = false
+[functions.process-document]
+verify_jwt = false
+[functions.delete-document]
+verify_jwt = false

@@ -1,4 +1,5 @@
 import { HttpError } from "./http.ts";
+import { createAdminClient } from "./supabase.ts";
 import type { SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2.116.0";
 
 export async function acquireRateLimit(
@@ -28,7 +29,8 @@ export async function acquireRateLimit(
   let released = false;
   return async () => {
     if (released) return;
-    const { error } = await admin.rpc("release_rate_limit", {
+    const releaseClient = createAdminClient(AbortSignal.timeout(10000));
+    const { error } = await releaseClient.rpc("release_rate_limit", {
       p_scope_key: scopeKey,
       p_lease_id: result.lease_id,
     });
