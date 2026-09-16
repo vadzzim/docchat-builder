@@ -137,7 +137,7 @@ jobs:
           }
           trap cleanup EXIT
 
-          npx --yes supabase@${SUPABASE_CLI_VERSION} start -x analytics,vector,logflare,imgproxy,realtime,supavisor,edge-runtime >test-results/supabase-start.log 2>&1
+          npx --yes supabase@${SUPABASE_CLI_VERSION} start --ignore-health-check -x analytics,vector,logflare,imgproxy,realtime,supavisor,edge-runtime >test-results/supabase-start.log 2>&1
           npx --yes supabase@${SUPABASE_CLI_VERSION} migration up --local >test-results/supabase-migration.log 2>&1
           pnpm setup:local >test-results/local-setup.log 2>&1
 
