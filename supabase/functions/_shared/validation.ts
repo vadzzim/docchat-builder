@@ -1,5 +1,6 @@
 import { z } from "https://esm.sh/zod@4.1.5";
-import { HttpError } from "./http.ts";
+
+export { parseJson } from "./http.ts";
 
 export const uuidSchema = z.string().uuid();
 
@@ -49,33 +50,3 @@ export const chatSchema = z.object({
     { message: "Message must be at most 1000 UTF-8 bytes." },
   ),
 });
-
-export async function parseJson<T>(
-  request: Request,
-  schema: z.ZodType<T>,
-  maxBytes = 20000,
-): Promise<T> {
-  const contentLength = Number(request.headers.get("content-length") ?? 0);
-  if (contentLength > maxBytes) throw new HttpError(413, "Request body is too large.", "payload_too_large");
-  let text: string;
-  try {
-    text = await request.text();
-  } catch {
-    throw new HttpError(400, "Request body could not be read.", "invalid_body");
-  }
-  if (new TextEncoder().encode(text).byteLength > maxBytes) {
-    throw new HttpError(413, "Request body is too large.", "payload_too_large");
-  }
-  let value: unknown;
-  try {
-    value = JSON.parse(text);
-  } catch {
-    throw new HttpError(400, "Request body must be valid JSON.", "invalid_json");
-  }
-  const parsed = schema.safeParse(value);
-  if (!parsed.success) {
-    const issue = parsed.error.issues[0];
-    throw new HttpError(400, issue?.message ?? "Request fields are invalid.", "validation_error");
-  }
-  return parsed.data;
-}

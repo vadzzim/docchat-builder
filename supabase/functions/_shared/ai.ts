@@ -51,11 +51,15 @@ export async function embed(input: string | string[], parentSignal?: AbortSignal
 
 export type ChatMessage = { role: "system" | "user" | "assistant"; content: string };
 
-export async function* chatStream(messages: ChatMessage[]): AsyncGenerator<string> {
+export async function* chatStream(messages: ChatMessage[], parentSignal?: AbortSignal): AsyncGenerator<string> {
   const controller = new AbortController();
+  const abortFromParent = () => controller.abort();
+  if (parentSignal?.aborted) controller.abort();
+  else parentSignal?.addEventListener("abort", abortFromParent, { once: true });
   const timer = setTimeout(() => controller.abort(), 90000);
   let sawDone = false;
   let response: Response;
+  let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
   try {
     response = await fetch(baseUrl + "/api/chat", {
       method: "POST",
@@ -70,19 +74,13 @@ export async function* chatStream(messages: ChatMessage[]): AsyncGenerator<strin
       }),
       signal: controller.signal,
     });
-  } catch (error) {
-    clearTimeout(timer);
-    throw error;
-  }
-  if (!response.ok || !response.body) {
-    clearTimeout(timer);
-    throw new Error("Ollama chat request failed (" + response.status + ").");
-  }
+    if (!response.ok || !response.body) {
+      throw new Error("Ollama chat request failed (" + response.status + ").");
+    }
 
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = "";
-  try {
+    reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
     while (true) {
       const { value, done } = await reader.read();
       if (done) break;
@@ -123,7 +121,8 @@ export async function* chatStream(messages: ChatMessage[]): AsyncGenerator<strin
   } finally {
     clearTimeout(timer);
     controller.abort();
-    reader.releaseLock();
+    parentSignal?.removeEventListener("abort", abortFromParent);
+    reader?.releaseLock();
   }
 }
 

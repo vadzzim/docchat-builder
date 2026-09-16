@@ -8,7 +8,8 @@
     "start": "next start",
     "typecheck": "tsc --noEmit",
     "lint": "tsc --noEmit",
-    "test:ingestion": "node scripts/ingestion-integration.mjs"
+    "test:ingestion": "node scripts/ingestion-integration.mjs",
+    "test:chat": "node scripts/chat-integration.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "2.116.0",

@@ -24,6 +24,24 @@ export function corsHeaders(request: Request, allowOrigin = true): Record<string
   return headers;
 }
 
+export function normalizeHttpOrigin(value: string | null): string | null {
+  if (!value) return null;
+  try {
+    const origin = new URL(value);
+    if (!["http:", "https:"].includes(origin.protocol) || origin.username || origin.password ||
+      origin.pathname !== "/" || origin.search || origin.hash) {
+      return null;
+    }
+    return origin.origin;
+  } catch {
+    return null;
+  }
+}
+
+export function requestOrigin(request: Request): string | null {
+  return normalizeHttpOrigin(request.headers.get("origin"));
+}
+
 export function preflight(request: Request): Response {
   return new Response(null, { status: 204, headers: corsHeaders(request) });
 }
@@ -125,4 +143,31 @@ export async function readBoundedBody(
     offset += chunk.byteLength;
   }
   return body;
+}
+
+export async function parseJson<T>(
+  request: Request,
+  schema: { safeParse: (value: unknown) => { success: true; data: T } | { success: false; error: { issues: Array<{ message?: string }> } } },
+  maxBytes = 20000,
+  signal?: AbortSignal,
+): Promise<T> {
+  const body = await readBoundedBody(request, maxBytes, signal, 30000);
+  let text: string;
+  try {
+    text = new TextDecoder("utf-8", { fatal: true }).decode(body);
+  } catch {
+    throw new HttpError(400, "Request body must be valid UTF-8.", "invalid_body");
+  }
+  let value: unknown;
+  try {
+    value = JSON.parse(text);
+  } catch {
+    throw new HttpError(400, "Request body must be valid JSON.", "invalid_json");
+  }
+  const parsed = schema.safeParse(value);
+  if (!parsed.success) {
+    const issue = parsed.error.issues[0];
+    throw new HttpError(400, issue?.message ?? "Request fields are invalid.", "validation_error");
+  }
+  return parsed.data;
 }

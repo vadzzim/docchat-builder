@@ -34,3 +34,7 @@ verify_jwt = false
 verify_jwt = false
 [functions.delete-document]
 verify_jwt = false
+[functions.public-session]
+verify_jwt = false
+[functions.chat]
+verify_jwt = false

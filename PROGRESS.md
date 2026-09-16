@@ -5,7 +5,7 @@
 - Next.js 16 App Router, TypeScript, Tailwind, and three small UI primitives are scaffolded.
 - Supabase local config uses project `docchat-local` and ports 55321 (API), 55322 (Postgres), 55323 (Studio), and 55324 (mail).
 - The initial migration is applied locally. It creates the one-account/one-bot schema, private `documents` Storage bucket, owner-only RLS reads, service-only write/RPC access, UTF-8 source limits, pgvector chunks, visitor session storage, owner/public conversations, monthly quota reservations, expiring concurrency leases, processing leases/generations, deletion tombstones, 30-day cleanup, and the 03:00 `pg_cron` job.
-- Existing Edge entrypoints are `create-bot` and `bot-settings`; both validate the bearer session server-side. Upload/process/chat/public session functions are the next bounded slice.
+- Edge entrypoints validate bearer sessions for owner operations; visitor session and chat entrypoints use their scoped server-side checks.
 - Ollama helper is configured for `/api/embed` with 1024-dimension validation and `/api/chat` with `think:false`, `num_ctx:4096`, deadlines, and strict NDJSON completion checks.
 
 ## Contracts for the next slice
@@ -33,3 +33,17 @@
 - Upload compensation, processing failure state writes, and rate-lease releases use fresh `AbortSignal.timeout(10000)` service clients unconditionally, so a deadline firing during cleanup cannot cancel the cleanup request.
 - Added Northstar Bikes fixtures in `demo/` and the native Node runner `scripts/ingestion-integration.mjs`. It creates isolated users, reads local keys from Supabase CLI JSON without printing them, and passed valid TXT/Markdown, multilingual chunk byte limits, invalid UTF-8, empty/oversized rejection, exact 1024-dimensional vectors, repeated processing, tenant isolation, deletion, and stale in-flight worker assertions.
 - Latest `node scripts/ingestion-integration.mjs`, `node_modules\\.bin\\tsc.cmd --noEmit`, `pnpm build`, `node --check scripts/ingestion-integration.mjs`, and `git diff --check` passed. The sandboxed `pnpm typecheck` wrapper attempted a no-TTY dependency reinstall; the direct compiler check passed outside the sandbox.
+
+## Chat slice
+
+- Added `public-session` for published, origin-bound visitor sessions. The loader request must carry an HTTP `Origin` equal to its normalized `embed_origin`; bot and hashed-IP leases are reserved before the bot lookup, and the response contains only the visitor token and safe widget settings.
+- Added streaming `chat` for owner and visitor actors. It validates the current publication/session binding, checks ready knowledge and conversation ownership, acquires actor and bot leases before history, reserves shared monthly quota immediately before the first model call, retrieves up to three ready chunks, streams strict Ollama output over `meta`/`token`/`done`/`error` SSE events, and saves only completed exchanges with citations.
+- Visitor chat accepts the configured `WIDGET_ORIGIN` (default `http://127.0.0.1:3000`) or the session's bound embedding origin. Provider cancellation, quota reservation, stable message ordering, and current publication checks remain server-side.
+- Added the `save_chat_exchange` RPC and identity-backed `messages.message_order` index, and registered only `public-session` and `chat` in the local Supabase config. Added `scripts/chat-integration.mjs` for isolated live owner/visitor, origin, quota, concurrency, history, and cleanup checks.
+- Focused checks passed for `node --check scripts/chat-integration.mjs`, the direct TypeScript compiler, and `git diff --check`. The full `node scripts/chat-integration.mjs` runner passed against local Supabase, Edge Functions, Storage, and Ollama, covering owner/visitor publication, origin, insufficient-information, conversation isolation, quota, concurrency, ordered persistence, no-document rejection, and cleanup.
+
+### Chat contracts
+
+- `POST /functions/v1/public-session` with `{ "bot_id": uuid, "embed_origin": http(s) origin }` and matching HTTP `Origin` returns `201 { session_token, expires_at, bot: { name, greeting, accent_color } }`. The token is only usable for its bot and bound origin while the bot is published.
+- `POST /functions/v1/chat` accepts `{ "bot_id": uuid, "message": string, "conversation_id"?: uuid, "session_token"?: string, "embed_origin"?: http(s) origin }`. Owners authenticate with a Supabase bearer token; visitors authenticate only with the session token and an allowed HTTP `Origin`.
+- Chat success is `text/event-stream`: `meta { conversation_id }`, zero or more `token { token }`, and `done { citations, usage: { monthly_used, monthly_limit } }`. Failures during streaming use `error { error, code }`; pre-stream validation and access failures use JSON `{ error, code }`.

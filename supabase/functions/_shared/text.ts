@@ -91,7 +91,7 @@ export function splitText(input: string, maxBytes = 600, overlapBytes = 80): str
 }
 
 export function safeFileName(name: string): { fileName: string; contentType: "text/plain" | "text/markdown" } {
-  const cleaned = name.replace(/[\u0000/\\\\]+/g, "_").trim().slice(0, 120);
+  const cleaned = name.replace(/[\u0000-\u001F\u007F/\\\\]+/g, "_").trim().slice(0, 120);
   const extension = cleaned.toLowerCase().endsWith(".md") ? "md" :
     cleaned.toLowerCase().endsWith(".txt") ? "txt" : "";
   if (!extension) throw new HttpError(400, "Only .txt and .md files are supported.", "unsupported_file_type");

@@ -91,11 +91,12 @@ async function adminRpc(apiUrl, serviceRoleKey, name, body) {
 
 async function removeStorage(apiUrl, serviceRoleKey, paths) {
   if (paths.length === 0) return;
-  await fetch(apiUrl + "/storage/v1/object/remove/documents", {
-    method: "POST",
+  const response = await fetch(apiUrl + "/storage/v1/object/documents", {
+    method: "DELETE",
     headers: authHeaders(serviceRoleKey),
     body: JSON.stringify({ prefixes: paths }),
   });
+  if (!response.ok) throw new Error("Storage cleanup failed.");
 }
 
 async function callJson(apiUrl, anonKey, path, token, body) {
