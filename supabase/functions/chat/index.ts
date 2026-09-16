@@ -269,7 +269,8 @@ Deno.serve(async (request) => {
               }
             }
             if (!answer.trim()) throw providerError();
-            if (answer.trim() === insufficientAnswer) citations = [];
+            const finalAnswer = answer.trim();
+            if (finalAnswer.endsWith(insufficientAnswer) && !/\[SOURCE\s+\d+\]/i.test(finalAnswer)) citations = [];
 
             const { data: saved, error: saveError } = await admin.rpc("save_chat_exchange", {
               p_conversation_id: chatConversation.id,

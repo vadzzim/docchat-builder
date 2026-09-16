@@ -52,15 +52,12 @@ function safeBot(value: unknown): WidgetBot | null {
   };
 }
 
-function accentTextColor(value: string): "#ffffff" | "#172033" {
+function accentTextColor(value: string): "#ffffff" | "#000000" {
   const channels = [0, 2, 4].map((offset) => Number.parseInt(value.slice(offset + 1, offset + 3), 16) / 255);
   const linear = channels.map((channel) => channel <= 0.03928 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4);
   const backgroundLuminance = 0.2126 * linear[0] + 0.7152 * linear[1] + 0.0722 * linear[2];
-  const darkLuminance = 0.2126 * 0.008568 + 0.7152 * 0.014444 + 0.0722 * 0.032293;
   const whiteContrast = 1.05 / (backgroundLuminance + 0.05);
-  const darkContrast = (Math.max(backgroundLuminance, darkLuminance) + 0.05) /
-    (Math.min(backgroundLuminance, darkLuminance) + 0.05);
-  return whiteContrast >= darkContrast ? "#ffffff" : "#172033";
+  return whiteContrast >= 4.5 ? "#ffffff" : "#000000";
 }
 
 function citations(value: unknown): Citation[] {

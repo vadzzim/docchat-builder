@@ -318,7 +318,7 @@ export default function DashboardPage() {
     const message = isDowngrade
       ? exceedsFreeLimits
         ? "Downgrade to Free? Your existing documents and monthly usage will be preserved. Because your current data is above Free limits, new uploads will stay blocked until you remove enough data. This is a mock plan change with no charge."
-        : "Downgrade to Free? Your existing documents and monthly usage will be preserved, and future uploads will use Free limits. This is a mock plan change with no charge."
+        : "Downgrade to Free? Your existing documents and monthly usage will be preserved, and new uploads will use Free limits. This is a mock plan change with no charge."
       : `${nextPlan === "pro" ? "Upgrade" : "Downgrade"} to ${nextPlan === "pro" ? "Pro" : "Free"}? This is a mock plan change with no charge.`;
     if (!window.confirm(message)) return;
     setBillingBusy(true);
@@ -529,7 +529,7 @@ export default function DashboardPage() {
             <h1 className="text-3xl font-bold tracking-tight text-ink sm:text-4xl">Build your support chat</h1>
             <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-500">Keep your source files private, test grounded answers, and review the citations before you make the bot public.</p>
           </div>
-          {refreshing && <p className="text-sm text-slate-400" role="status">Refreshing…</p>}
+          {refreshing && <p className="text-sm text-slate-500" role="status">Refreshing…</p>}
         </div>
 
         {dashboardError && <div className="mb-6 rounded-xl bg-rose-50 px-4 py-3 text-sm leading-6 text-rose-700" role="alert">{dashboardError}</div>}
@@ -560,25 +560,29 @@ export default function DashboardPage() {
           <>
             <div className="mb-5 flex flex-col justify-between gap-4 rounded-3xl bg-white p-5 shadow-sm ring-1 ring-slate-200/80 sm:flex-row sm:items-center sm:p-6">
               <div className="min-w-0">
-                <p className="text-xs font-bold uppercase tracking-[0.16em] text-slate-400">Your bot</p>
+                <p className="text-xs font-bold uppercase tracking-[0.16em] text-slate-500">Your bot</p>
                 <h2 className="mt-1 truncate text-xl font-bold text-ink">{bot.name}</h2>
                 <p className="mt-1 truncate text-sm text-slate-500">{bot.greeting}</p>
+                <div className="mt-3 flex flex-wrap items-center gap-2" aria-label={`Bot visibility: ${bot.public_enabled ? "Public" : "Private"}`}>
+                  <span className={`rounded-full px-2.5 py-1 text-xs font-semibold ${bot.public_enabled ? "bg-emerald-50 text-emerald-700" : "bg-slate-100 text-slate-600"}`}>{bot.public_enabled ? "Public" : "Private"}</span>
+                  <span className="text-xs leading-5 text-slate-500">{bot.public_enabled ? "Answers and cited excerpts are visible on allowed websites; files stay private." : "Only you can test this bot; source files stay private."}</span>
+                </div>
               </div>
               <div className="grid grid-cols-2 gap-3 text-sm sm:min-w-72">
-                <div className="rounded-2xl bg-slate-50 px-3 py-3"><p className="text-xs text-slate-400">Knowledge</p><p className="mt-1 font-semibold text-ink">{readyDocuments.length} ready</p></div>
-                <div className="rounded-2xl bg-slate-50 px-3 py-3"><p className="text-xs text-slate-400">AI this month</p><p className="mt-1 font-semibold text-ink">{usage.used} / {usage.limit}</p></div>
+                <div className="rounded-2xl bg-slate-50 px-3 py-3"><p className="text-xs text-slate-500">Knowledge</p><p className="mt-1 font-semibold text-ink">{readyDocuments.length} ready</p></div>
+                <div className="rounded-2xl bg-slate-50 px-3 py-3"><p className="text-xs text-slate-500">AI this month</p><p className="mt-1 font-semibold text-ink">{usage.used} / {usage.limit}</p></div>
               </div>
             </div>
 
-            <div className="mb-6 flex flex-wrap gap-2 border-b border-slate-200" role="tablist" aria-label="Workspace sections">
-              <button type="button" role="tab" aria-selected={tab === "knowledge"} className={`border-b-2 px-3 py-3 text-sm font-semibold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-lilac ${tab === "knowledge" ? "border-lilac text-ink" : "border-transparent text-slate-500 hover:text-ink"}`} onClick={() => setTab("knowledge")}>Knowledge</button>
-              <button type="button" role="tab" aria-selected={tab === "chat"} className={`border-b-2 px-3 py-3 text-sm font-semibold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-lilac ${tab === "chat" ? "border-lilac text-ink" : "border-transparent text-slate-500 hover:text-ink"}`} onClick={() => setTab("chat")}>Chat</button>
-              <button type="button" role="tab" aria-selected={tab === "billing"} className={`border-b-2 px-3 py-3 text-sm font-semibold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-lilac ${tab === "billing" ? "border-lilac text-ink" : "border-transparent text-slate-500 hover:text-ink"}`} onClick={() => setTab("billing")}>Billing</button>
-              <button type="button" role="tab" aria-selected={tab === "settings"} className={`border-b-2 px-3 py-3 text-sm font-semibold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-lilac ${tab === "settings" ? "border-lilac text-ink" : "border-transparent text-slate-500 hover:text-ink"}`} onClick={() => setTab("settings")}>Settings</button>
+            <div className="mb-6 flex flex-wrap gap-2 border-b border-slate-200" role="group" aria-label="Workspace sections">
+              <button type="button" aria-pressed={tab === "knowledge"} className={`border-b-2 px-3 py-3 text-sm font-semibold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-lilac ${tab === "knowledge" ? "border-lilac text-ink" : "border-transparent text-slate-500 hover:text-ink"}`} onClick={() => setTab("knowledge")}>Knowledge</button>
+              <button type="button" aria-pressed={tab === "chat"} className={`border-b-2 px-3 py-3 text-sm font-semibold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-lilac ${tab === "chat" ? "border-lilac text-ink" : "border-transparent text-slate-500 hover:text-ink"}`} onClick={() => setTab("chat")}>Chat</button>
+              <button type="button" aria-pressed={tab === "billing"} className={`border-b-2 px-3 py-3 text-sm font-semibold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-lilac ${tab === "billing" ? "border-lilac text-ink" : "border-transparent text-slate-500 hover:text-ink"}`} onClick={() => setTab("billing")}>Billing</button>
+              <button type="button" aria-pressed={tab === "settings"} className={`border-b-2 px-3 py-3 text-sm font-semibold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-lilac ${tab === "settings" ? "border-lilac text-ink" : "border-transparent text-slate-500 hover:text-ink"}`} onClick={() => setTab("settings")}>Settings</button>
             </div>
 
             {tab === "knowledge" ? (
-              <section role="tabpanel" aria-label="Knowledge">
+              <section role="region" aria-label="Knowledge">
                 <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_18rem]">
                   <Card className="p-5 sm:p-6">
                     <div className="flex flex-col justify-between gap-4 sm:flex-row sm:items-start">
@@ -596,7 +600,7 @@ export default function DashboardPage() {
                         const canProcess = document.status === "pending" || document.status === "error" || (document.status === "processing" && !activeDocumentId);
                         return <div key={document.id} className="rounded-2xl bg-slate-50 px-4 py-4">
                           <div className="flex flex-col justify-between gap-3 sm:flex-row sm:items-start">
-                            <div className="min-w-0"><p className="truncate font-semibold text-ink">{document.file_name}</p><p className="mt-1 text-xs text-slate-400">{formatBytes(document.source_size_bytes)} · added {formatDate(document.created_at)}</p></div>
+                            <div className="min-w-0"><p className="truncate font-semibold text-ink">{document.file_name}</p><p className="mt-1 text-xs text-slate-500">{formatBytes(document.source_size_bytes)} · added {formatDate(document.created_at)}</p></div>
                             <span className={`w-fit rounded-full px-2.5 py-1 text-xs font-semibold ${status.className}`}>{status.label}</span>
                           </div>
                           {document.process_error && <p className="mt-3 rounded-xl bg-white px-3 py-2 text-sm leading-5 text-rose-700">{document.process_error}</p>}
@@ -611,17 +615,17 @@ export default function DashboardPage() {
                   </Card>
 
                   <aside className="space-y-5">
-                    <Card className="p-5"><h2 className="font-semibold text-ink">Plan limits</h2><p className="mt-1 text-sm font-semibold text-lilac">{usage.plan === "pro" ? "Pro" : "Free"}</p><dl className="mt-4 space-y-3 text-sm"><div className="flex justify-between gap-3"><dt className="text-slate-500">Documents</dt><dd className="font-semibold text-ink">{documents.length} / {limits.documents}</dd></div><div className="flex justify-between gap-3"><dt className="text-slate-500">Source text</dt><dd className="font-semibold text-ink">{formatBytes(totalSourceBytes)} / {formatBytes(limits.sourceBytes)}</dd></div><div className="flex justify-between gap-3"><dt className="text-slate-500">Each file</dt><dd className="font-semibold text-ink">100 KiB max</dd></div><div className="flex justify-between gap-3"><dt className="text-slate-500">AI requests</dt><dd className="font-semibold text-ink">{usage.used} / {usage.limit}</dd></div></dl><p className="mt-4 text-xs leading-5 text-slate-400">Your server plan controls these limits. Usage counts owner and visitor chats together.</p></Card>
-                    <Card className="p-5"><h2 className="font-semibold text-ink">Private by default</h2><p className="mt-2 text-sm leading-6 text-slate-500">Your original files stay private while you test. When you are ready, choose which websites may use this bot.</p></Card>
+                    <Card className="p-5"><h2 className="font-semibold text-ink">Plan limits</h2><p className="mt-1 text-sm font-semibold text-lilac">{usage.plan === "pro" ? "Pro" : "Free"}</p><dl className="mt-4 space-y-3 text-sm"><div className="flex justify-between gap-3"><dt className="text-slate-500">Documents</dt><dd className="font-semibold text-ink">{documents.length} / {limits.documents}</dd></div><div className="flex justify-between gap-3"><dt className="text-slate-500">Source text</dt><dd className="font-semibold text-ink">{formatBytes(totalSourceBytes)} / {formatBytes(limits.sourceBytes)}</dd></div><div className="flex justify-between gap-3"><dt className="text-slate-500">Each file</dt><dd className="font-semibold text-ink">100 KiB max</dd></div><div className="flex justify-between gap-3"><dt className="text-slate-500">AI requests</dt><dd className="font-semibold text-ink">{usage.used} / {usage.limit}</dd></div></dl><p className="mt-4 text-xs leading-5 text-slate-500">Your plan controls these limits. Usage counts owner and visitor chats together.</p></Card>
+                    <Card className="p-5"><div className="flex flex-wrap items-center justify-between gap-2"><h2 className="font-semibold text-ink">Visibility</h2><span className={`rounded-full px-2.5 py-1 text-xs font-semibold ${bot.public_enabled ? "bg-emerald-50 text-emerald-700" : "bg-slate-100 text-slate-600"}`}>{bot.public_enabled ? "Public" : "Private"}</span></div><p className="mt-2 text-sm leading-6 text-slate-500">{bot.public_enabled ? "Visitor answers and their cited excerpts are visible on your allowed websites. Original files remain private." : "Your bot and original files stay private while you test. Publish from Settings when answers are ready."}</p></Card>
                   </aside>
                 </div>
               </section>
             ) : tab === "chat" ? (
-              <section role="tabpanel" aria-label="Chat">
+              <section role="region" aria-label="Chat">
                 <ChatPanel session={session} bot={bot} conversations={conversations} hasReadyDocuments={readyDocuments.length > 0} onConversationsChange={setConversations} onUsageRefresh={refreshUsage} />
               </section>
             ) : tab === "billing" ? (
-              <section role="tabpanel" aria-label="Billing">
+              <section role="region" aria-label="Billing">
                 <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_18rem]">
                   <Card className="p-5 sm:p-6">
                     <div className="mb-6"><p className="mb-2 text-xs font-bold uppercase tracking-[0.16em] text-lilac">Mock billing</p><h2 className="text-xl font-bold text-ink">Choose your plan</h2><p className="mt-1 max-w-2xl text-sm leading-6 text-slate-500">These illustrative plans change limits locally for testing. No payment is collected and no card is required.</p></div>
@@ -647,7 +651,7 @@ export default function DashboardPage() {
                 </div>
               </section>
             ) : (
-              <section role="tabpanel" aria-label="Settings">
+              <section role="region" aria-label="Settings">
                 <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_20rem]">
                   <Card className="p-5 sm:p-6">
                     <div className="mb-6"><p className="mb-2 text-xs font-bold uppercase tracking-[0.16em] text-lilac">Bot settings</p><h2 className="text-xl font-bold text-ink">Shape your assistant</h2><p className="mt-1 text-sm leading-6 text-slate-500">Update the details visitors will see when the bot is ready to go live.</p></div>

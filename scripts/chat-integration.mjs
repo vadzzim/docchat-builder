@@ -313,8 +313,18 @@ async function main() {
       message: "What is Northstar's phone number?",
     });
     const missingDone = doneEvent(missing);
-    assert(tokenText(missing) === "I couldn't find that in the uploaded documents.", "Missing information did not use the insufficient-information answer.");
+    const missingAnswer = tokenText(missing);
+    assert(missingAnswer.trim().endsWith("I couldn't find that in the uploaded documents."), "Missing information did not end with the insufficient-information answer: " + JSON.stringify(missingAnswer));
+    assert(!/\d/.test(missingAnswer), "Missing information invented a numeric phone detail: " + JSON.stringify(missingAnswer));
     assert(Array.isArray(missingDone.citations) && missingDone.citations.length === 0, "Missing information unexpectedly returned citations.");
+    const missingMessages = await adminSelect(apiUrl, serviceRoleKey, "messages", {
+      select: "role,content,citations,message_order",
+      conversation_id: "eq." + ownerConversationId,
+      order: "message_order.asc",
+    });
+    const persistedMissing = missingMessages[missingMessages.length - 1];
+    assert(persistedMissing?.role === "assistant" && Array.isArray(persistedMissing.citations) && persistedMissing.citations.length === 0,
+      "Persisted missing-information answer retained citations: " + JSON.stringify(persistedMissing));
 
     const visitorAnswer = await callChat(apiUrl, anonKey, null, {
       bot_id: botId,

@@ -181,7 +181,11 @@ export function ChatPanel({
 
   useEffect(() => {
     if (!selectedConversationId || streamingRef.current) {
-      if (!selectedConversationId) setMessages([]);
+      if (!selectedConversationId) {
+        setMessages([]);
+        setLoadingHistory(false);
+        setHistoryError(null);
+      }
       return;
     }
     let mounted = true;
@@ -194,7 +198,7 @@ export function ChatPanel({
       .then(({ data, error }) => {
         if (!mounted) return;
         if (error) {
-          setHistoryError("Conversation history could not be loaded. Try selecting it again.");
+          setHistoryError("Conversation history could not be loaded. Start a new chat, then select this conversation to retry.");
           setMessages([]);
         } else {
           setMessages(((data ?? []) as unknown[]).map((row) => {
@@ -217,7 +221,7 @@ export function ChatPanel({
   }, [selectedConversationId]);
 
   function startNewChat() {
-    if (sending) return;
+    if (sending || loadingHistory) return;
     setSelectedConversationId(null);
     setMessages([]);
     setChatNotice(null);
@@ -235,7 +239,7 @@ export function ChatPanel({
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const trimmed = message.trim();
-    if (!trimmed || sending) return;
+    if (!trimmed || sending || loadingHistory) return;
     if (bytesUsed(trimmed) > maxQuestionBytes) {
       setChatNotice("Keep your question under 1,000 UTF-8 bytes.");
       return;
@@ -327,24 +331,25 @@ export function ChatPanel({
       <aside aria-label="Owner conversations">
         <div className="flex items-center justify-between gap-2 lg:block">
           <div>
-            <p className="text-xs font-bold uppercase tracking-[0.16em] text-slate-400">History</p>
-            <p className="mt-1 text-xs text-slate-400">Kept for 30 days</p>
+            <p className="text-xs font-bold uppercase tracking-[0.16em] text-slate-500">History</p>
+            <p className="mt-1 text-xs text-slate-500">Kept for 30 days</p>
           </div>
-          <Button className="mt-2 whitespace-nowrap lg:mt-4" variant="secondary" type="button" onClick={startNewChat} disabled={sending}>New chat</Button>
+          <Button className="mt-2 whitespace-nowrap lg:mt-4" variant="secondary" type="button" onClick={startNewChat} disabled={sending || loadingHistory}>New chat</Button>
         </div>
-        <div className="mt-4 flex gap-2 overflow-x-auto pb-1 lg:block lg:space-y-1 lg:overflow-visible" role="list">
+        <div className="mt-4 max-h-[18rem] flex gap-2 overflow-x-auto overflow-y-auto pb-1 lg:block lg:max-h-[34rem] lg:space-y-1 lg:overflow-x-visible" role="list">
           {conversations.length === 0 ? (
-            <p className="text-xs leading-5 text-slate-400">Your completed conversations will appear here.</p>
+            <p className="text-xs leading-5 text-slate-500">Your completed conversations will appear here.</p>
           ) : conversations.map((conversation) => (
             <div key={conversation.id} role="listitem">
               <button
                 type="button"
                 className={`shrink-0 rounded-xl px-3 py-2 text-left text-xs transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-lilac lg:block lg:w-full ${selectedConversationId === conversation.id ? "bg-white font-semibold text-ink ring-1 ring-lilac/40" : "text-slate-500 hover:bg-white hover:text-ink"}`}
                 onClick={() => {
-                  if (sending) return;
+                  if (sending || loadingHistory) return;
                   setChatNotice(null);
                   setSelectedConversationId(conversation.id);
                 }}
+                disabled={sending || loadingHistory}
                 aria-current={selectedConversationId === conversation.id ? "page" : undefined}
                 aria-label={`Conversation from ${formatConversationDate(conversation.last_activity_at || conversation.created_at)}`}
               >
@@ -359,7 +364,7 @@ export function ChatPanel({
         <div className="flex items-center justify-between gap-3 border-b border-slate-100 pb-4">
           <div className="min-w-0">
             <p className="truncate font-semibold text-ink">{bot.name}</p>
-            <p className="text-xs text-slate-400">Answers use ready documents and include sources.</p>
+            <p className="text-xs text-slate-500">Answers use ready documents and include sources.</p>
           </div>
           {sending && <Button variant="ghost" type="button" onClick={() => streamController.current?.abort()}>Stop</Button>}
         </div>
@@ -375,7 +380,7 @@ export function ChatPanel({
           <>
             <div ref={transcriptRef} className="min-h-0 max-h-[34rem] flex-1 space-y-4 overflow-y-auto py-6" role="log" aria-live="polite" aria-label="Chat transcript">
               {loadingHistory ? (
-                <p className="text-center text-sm text-slate-400" role="status">Loading conversation…</p>
+                <p className="text-center text-sm text-slate-500" role="status">Loading conversation…</p>
               ) : historyError ? (
                 <p className="rounded-xl bg-rose-50 px-3 py-3 text-sm text-rose-700" role="alert">{historyError}</p>
               ) : messages.length === 0 ? (
@@ -385,7 +390,7 @@ export function ChatPanel({
                   <div className={item.role === "user" ? "rounded-2xl rounded-br-md bg-lilac px-4 py-3 text-sm leading-6 text-white" : "rounded-2xl rounded-bl-md bg-slate-100 px-4 py-3 text-sm leading-6 text-slate-700"}>
                     <p className="whitespace-pre-wrap break-words">{item.content}</p>
                   </div>
-                  {item.pending && <p className="mt-1 px-1 text-xs text-slate-400" role="status">Writing…</p>}
+                  {item.pending && <p className="mt-1 px-1 text-xs text-slate-500" role="status">Writing…</p>}
                   {item.incomplete && <p className="mt-1 px-1 text-xs text-rose-600" role="status">Incomplete response. Nothing was saved as a completed answer.</p>}
                   {item.role === "assistant" && !item.pending && !item.incomplete && item.citations.length > 0 && (
                     <details className="mt-2 rounded-xl bg-white px-3 py-2 text-xs text-slate-600 ring-1 ring-slate-200">
@@ -415,11 +420,11 @@ export function ChatPanel({
                   placeholder="Ask about your documents…"
                   maxLength={1000}
                   rows={2}
-                  disabled={sending}
+                  disabled={sending || loadingHistory}
                 />
-                <Button type="submit" disabled={sending || !message.trim()}>{sending ? "Answering…" : "Send"}</Button>
+                <Button type="submit" disabled={sending || loadingHistory || !message.trim()}>{sending ? "Answering…" : "Send"}</Button>
               </div>
-              <p className={`mt-2 text-right text-xs ${bytesUsed(message) > maxQuestionBytes ? "text-rose-600" : "text-slate-400"}`}>{bytesUsed(message)} / {maxQuestionBytes} UTF-8 bytes</p>
+              <p className={`mt-2 text-right text-xs ${bytesUsed(message) > maxQuestionBytes ? "text-rose-600" : "text-slate-500"}`}>{bytesUsed(message)} / {maxQuestionBytes} UTF-8 bytes</p>
             </form>
           </>
         )}

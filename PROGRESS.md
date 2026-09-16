@@ -88,3 +88,14 @@ Root verified real browser Free → Pro → Free transitions with unchanged usag
 - Applied migrations `20260916000500_bot_cleanup.sql` and corrective lock migration `20260916000600_bot_delete_lock.sql` locally. `node --check` for both native scripts, the direct TypeScript compiler, `pnpm build`, and `git diff --check` pass.
 
 Root independently verified browser cancellation/confirmation and deletion during real processing, with the account remaining active and bot/document/chunk/Storage counts all zero. Forged forwarding headers now share Kong's canonical IP scope. All 12 public tables have RLS; cleanup and deletion RPCs deny browser roles. A real outage of only the verified DocChat Storage container retained the source and tombstone; restart and retry removed both. Independent review findings on lock ordering and repeated-delete copy were fixed and accepted.
+
+## Product UI polish slice
+
+- Refined the landing page around the real Free and Pro mock limits, with clear no-charge/no-card copy, working sign-in/sign-up links, and an accurate private-by-default example.
+- Workspace visibility now reflects the saved Public or Private state in the header and Knowledge view. Section controls use labeled button groups with `aria-pressed`, and muted body text uses readable slate contrast.
+- Owner history and the transcript stay bounded; selecting, creating, or submitting a chat is disabled while history loads. The widget uses pure black text whenever white fails the 4.5:1 accent contrast threshold.
+- Chat handling keeps the model's raw insufficient-information wording while treating a refusal suffix without an explicit source marker as uncited. The live runner also rejects invented numeric phone details and verifies that the persisted assistant message has no citations. The local small model may prepend a short sentence before the refusal, so the check intentionally accepts that observed variation.
+
+The direct TypeScript compiler, production build, live chat runner, and `git diff --check` pass for this boundary; root browser QA follows.
+
+Root browser QA passed keyboard section selection, all four dashboard sections and the landing at 320px without horizontal overflow, saved Public/Private state, and a real embedded `#777777` accent using black text. Controlled history transport checks verified disabled/restored controls, recovery after a failed read, and recovery when the selected conversation disappears during a pending read. Review fixes reset stale loading/error state and make the recovery guidance actionable. The post-cleanup ingestion and billing runners also passed; the chat runner passed after the refusal citation fix without changing model settings.
