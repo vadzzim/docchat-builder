@@ -1,12 +1,14 @@
-import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
+
+const primaryLink = "inline-flex items-center justify-center rounded-xl bg-ink px-4 py-2 text-sm font-semibold text-white transition hover:bg-slate-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-lilac focus-visible:ring-offset-2";
+const secondaryLink = "inline-flex items-center justify-center rounded-xl bg-white px-4 py-2 text-sm font-semibold text-ink ring-1 ring-slate-200 transition hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-lilac focus-visible:ring-offset-2";
 
 export default function HomePage() {
   return (
     <main className="mx-auto flex min-h-screen max-w-6xl flex-col px-6 py-8 lg:px-10">
       <nav className="flex items-center justify-between">
         <a className="text-lg font-bold tracking-tight" href="#top" aria-label="DocChat home">doc<span className="text-lilac">chat</span></a>
-        <Button variant="ghost">Sign in</Button>
+        <a className="rounded-lg px-3 py-2 text-sm font-semibold text-slate-600 transition hover:bg-white hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-lilac" href="/auth">Sign in</a>
       </nav>
       <section id="top" className="grid flex-1 items-center gap-12 py-20 lg:grid-cols-[1.1fr_.9fr]">
         <div>
@@ -14,8 +16,8 @@ export default function HomePage() {
           <h1 className="max-w-2xl text-5xl font-bold leading-[1.05] tracking-tight text-ink sm:text-6xl">A helpful chatbot, built from what you already know.</h1>
           <p className="mt-6 max-w-xl text-lg leading-8 text-slate-600">Upload your support docs, check the answers, and add a grounded chat to your site when it is ready.</p>
           <div className="mt-8 flex flex-wrap gap-3">
-            <Button>Try DocChat</Button>
-            <Button variant="secondary">See how it works</Button>
+            <a className={primaryLink} href="/auth?mode=signup">Try DocChat</a>
+            <a className={secondaryLink} href="#how-it-works">See how it works</a>
           </div>
         </div>
         <Card className="overflow-hidden p-5">
@@ -29,6 +31,11 @@ export default function HomePage() {
             <p className="px-1 text-xs text-slate-400">Sources · shipping.md</p>
           </div>
         </Card>
+      </section>
+      <section id="how-it-works" className="grid gap-4 border-t border-slate-200 py-10 sm:grid-cols-3">
+        <div><p className="text-sm font-semibold text-lilac">01 · Upload</p><p className="mt-2 text-sm leading-6 text-slate-600">Add the TXT and Markdown files your support team already trusts.</p></div>
+        <div><p className="text-sm font-semibold text-lilac">02 · Test</p><p className="mt-2 text-sm leading-6 text-slate-600">Ask real questions and inspect the source excerpts behind each answer.</p></div>
+        <div><p className="text-sm font-semibold text-lilac">03 · Publish later</p><p className="mt-2 text-sm leading-6 text-slate-600">Keep the bot private while you review it, then connect it to an allowed site.</p></div>
       </section>
       <footer className="flex flex-wrap gap-6 border-t border-slate-200 py-6 text-sm text-slate-500"><span>Private source files</span><span>Answers with citations</span><span>Free to test</span></footer>
     </main>

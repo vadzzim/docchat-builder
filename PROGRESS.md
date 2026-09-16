@@ -47,3 +47,13 @@
 - `POST /functions/v1/public-session` with `{ "bot_id": uuid, "embed_origin": http(s) origin }` and matching HTTP `Origin` returns `201 { session_token, expires_at, bot: { name, greeting, accent_color } }`. The token is only usable for its bot and bound origin while the bot is published.
 - `POST /functions/v1/chat` accepts `{ "bot_id": uuid, "message": string, "conversation_id"?: uuid, "session_token"?: string, "embed_origin"?: http(s) origin }`. Owners authenticate with a Supabase bearer token; visitors authenticate only with the session token and an allowed HTTP `Origin`.
 - Chat success is `text/event-stream`: `meta { conversation_id }`, zero or more `token { token }`, and `done { citations, usage: { monthly_used, monthly_limit } }`. Failures during streaming use `error { error, code }`; pre-stream validation and access failures use JSON `{ error, code }`.
+
+## Owner browser slice
+
+- Added real Supabase email/password flows at `/auth`: sign-up with confirmation-email state, sign-in, forgot-password email, callback verification, expired-link errors, recovery password form, and sign-out. Reset links stay on the password form until the owner chooses to continue.
+- Added the protected `/dashboard` owner shell. It creates the single bot through `create-bot`, reads bot/documents/conversations/usage through the browser SDK and RLS, and keeps the app's server operations in Edge Functions.
+- Added responsive Knowledge and Chat tabs. Owners can upload bounded TXT/Markdown files, see the row immediately, process with bounded status polling, retry failures, and delete with a clear history-preservation notice. Plan limits and UTC monthly usage are visible and remain server-authoritative.
+- Added `components/chat-panel.tsx` for owner bearer-authenticated SSE chat. It buffers UTF-8 SSE frames, requires a `done` event before marking an answer complete, keeps a visible incomplete marker on error/cancel, reloads ordered owner history by `message_order`, and renders source excerpts as plain text in accessible details.
+- Added `lib/edge-client.ts` for browser-safe Edge Function calls; it sends only the public Supabase URL/anon key and never exposes service credentials. Local auth redirects explicitly allow both `127.0.0.1:3000` and `localhost:3000`.
+
+Root's live browser checks covered confirmation and recovery links (including expired/reused and literal-percent errors), isolated owner signup and bot creation, three real document uploads and processing, grounded streamed answers with citations and restored history, insufficient-information responses, invalid/oversized input, sign-out/sign-in, and a 390px no-overflow layout. The direct TypeScript compiler and `pnpm build` pass for this slice.

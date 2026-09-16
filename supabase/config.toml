@@ -18,7 +18,7 @@ file_size_limit = "100KiB"
 
 [auth]
 site_url = "http://localhost:3000"
-additional_redirect_urls = ["http://127.0.0.1:3000/**"]
+additional_redirect_urls = ["http://127.0.0.1:3000/**", "http://localhost:3000/**"]
 
 [auth.email]
 enable_signup = true
