@@ -10,7 +10,8 @@
     "typecheck": "tsc --noEmit",
     "lint": "tsc --noEmit",
     "test:ingestion": "node scripts/ingestion-integration.mjs",
-    "test:chat": "node scripts/chat-integration.mjs"
+    "test:chat": "node scripts/chat-integration.mjs",
+    "test:billing": "node scripts/billing-integration.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "2.116.0",

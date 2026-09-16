@@ -38,3 +38,5 @@ verify_jwt = false
 verify_jwt = false
 [functions.chat]
 verify_jwt = false
+[functions.mock-billing]
+verify_jwt = false

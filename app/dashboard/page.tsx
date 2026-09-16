@@ -16,7 +16,7 @@ const processingPollMilliseconds = 2000;
 const processingPollWindowMilliseconds = 180000;
 
 type Plan = "free" | "pro";
-type Tab = "knowledge" | "chat" | "settings";
+type Tab = "knowledge" | "chat" | "billing" | "settings";
 type Notice = { kind: "error" | "success"; text: string } | null;
 
 type Bot = ChatBot & {
@@ -43,11 +43,18 @@ type Usage = {
 };
 
 type BotResponse = { bot?: Bot };
+type MockBillingResponse = { mock?: boolean; charged?: boolean; plan?: Plan; message?: string };
 type ProcessResponse = { document_id?: string; status?: DocumentRow["status"]; chunk_count?: number; idempotent?: boolean };
 
 function monthStartUtc(): string {
   const now = new Date();
   return `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, "0")}-01`;
+}
+
+function nextMonthResetUtc(): string {
+  const now = new Date();
+  const reset = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1));
+  return `${new Intl.DateTimeFormat("en", { month: "short", day: "numeric", year: "numeric", timeZone: "UTC" }).format(reset)} at 00:00 UTC`;
 }
 
 function formatBytes(bytes: number): string {
@@ -128,6 +135,8 @@ export default function DashboardPage() {
   const [settingsBusy, setSettingsBusy] = useState(false);
   const [settingsNotice, setSettingsNotice] = useState<Notice>(null);
   const [snippetNotice, setSnippetNotice] = useState<string | null>(null);
+  const [billingBusy, setBillingBusy] = useState(false);
+  const [billingNotice, setBillingNotice] = useState<Notice>(null);
 
   const loadUsage = useCallback(async (activeSession: Session) => {
     const [accountResult, usageResult] = await Promise.all([
@@ -295,6 +304,39 @@ export default function DashboardPage() {
       setSettingsNotice({ kind: "error", text: error instanceof Error ? error.message : "Your bot settings could not be saved." });
     } finally {
       setSettingsBusy(false);
+    }
+  }
+
+  async function changePlan(nextPlan: Plan) {
+    if (!session || billingBusy || nextPlan === usage.plan) return;
+    const freeLimits = planLimits("free");
+    const isDowngrade = nextPlan === "free" && usage.plan === "pro";
+    const exceedsFreeLimits = documents.length > freeLimits.documents || totalSourceBytes > freeLimits.sourceBytes;
+    const message = isDowngrade
+      ? exceedsFreeLimits
+        ? "Downgrade to Free? Your existing documents and monthly usage will be preserved. Because your current data is above Free limits, new uploads will stay blocked until you remove enough data. This is a mock plan change with no charge."
+        : "Downgrade to Free? Your existing documents and monthly usage will be preserved, and future uploads will use Free limits. This is a mock plan change with no charge."
+      : `${nextPlan === "pro" ? "Upgrade" : "Downgrade"} to ${nextPlan === "pro" ? "Pro" : "Free"}? This is a mock plan change with no charge.`;
+    if (!window.confirm(message)) return;
+    setBillingBusy(true);
+    setBillingNotice(null);
+    try {
+      const result = await callEdgeFunction<MockBillingResponse>("mock-billing", session, { plan: nextPlan });
+      if (!result.response.ok || result.data.mock !== true || result.data.charged !== false || result.data.plan !== nextPlan) {
+        throw new Error(edgeError(result.data, "Your mock plan could not be changed."));
+      }
+      const confirmedPlan = result.data.plan;
+      setUsage((current) => ({ ...current, plan: confirmedPlan, limit: planLimits(confirmedPlan).monthly }));
+      try {
+        await loadUsage(session);
+        setBillingNotice({ kind: "success", text: `${nextPlan === "pro" ? "Pro" : "Free"} is active. This mock change made no charge; your data and monthly usage were preserved.` });
+      } catch {
+        setBillingNotice({ kind: "error", text: `${nextPlan === "pro" ? "Pro" : "Free"} is active, but current usage could not be refreshed. Reload the dashboard to check it.` });
+      }
+    } catch (error) {
+      setBillingNotice({ kind: "error", text: error instanceof Error ? error.message : "Your mock plan could not be changed." });
+    } finally {
+      setBillingBusy(false);
     }
   }
 
@@ -494,9 +536,10 @@ export default function DashboardPage() {
               </div>
             </div>
 
-            <div className="mb-6 flex gap-2 border-b border-slate-200" role="tablist" aria-label="Workspace sections">
+            <div className="mb-6 flex flex-wrap gap-2 border-b border-slate-200" role="tablist" aria-label="Workspace sections">
               <button type="button" role="tab" aria-selected={tab === "knowledge"} className={`border-b-2 px-3 py-3 text-sm font-semibold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-lilac ${tab === "knowledge" ? "border-lilac text-ink" : "border-transparent text-slate-500 hover:text-ink"}`} onClick={() => setTab("knowledge")}>Knowledge</button>
               <button type="button" role="tab" aria-selected={tab === "chat"} className={`border-b-2 px-3 py-3 text-sm font-semibold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-lilac ${tab === "chat" ? "border-lilac text-ink" : "border-transparent text-slate-500 hover:text-ink"}`} onClick={() => setTab("chat")}>Chat</button>
+              <button type="button" role="tab" aria-selected={tab === "billing"} className={`border-b-2 px-3 py-3 text-sm font-semibold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-lilac ${tab === "billing" ? "border-lilac text-ink" : "border-transparent text-slate-500 hover:text-ink"}`} onClick={() => setTab("billing")}>Billing</button>
               <button type="button" role="tab" aria-selected={tab === "settings"} className={`border-b-2 px-3 py-3 text-sm font-semibold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-lilac ${tab === "settings" ? "border-lilac text-ink" : "border-transparent text-slate-500 hover:text-ink"}`} onClick={() => setTab("settings")}>Settings</button>
             </div>
 
@@ -542,6 +585,32 @@ export default function DashboardPage() {
             ) : tab === "chat" ? (
               <section role="tabpanel" aria-label="Chat">
                 <ChatPanel session={session} bot={bot} conversations={conversations} hasReadyDocuments={readyDocuments.length > 0} onConversationsChange={setConversations} onUsageRefresh={refreshUsage} />
+              </section>
+            ) : tab === "billing" ? (
+              <section role="tabpanel" aria-label="Billing">
+                <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_18rem]">
+                  <Card className="p-5 sm:p-6">
+                    <div className="mb-6"><p className="mb-2 text-xs font-bold uppercase tracking-[0.16em] text-lilac">Mock billing</p><h2 className="text-xl font-bold text-ink">Choose your plan</h2><p className="mt-1 max-w-2xl text-sm leading-6 text-slate-500">These illustrative plans change limits locally for testing. No payment is collected and no card is required.</p></div>
+                    {billingNotice && <div className={`mb-5 rounded-xl px-4 py-3 text-sm leading-6 ${billingNotice.kind === "error" ? "bg-rose-50 text-rose-700" : "bg-emerald-50 text-emerald-700"}`} role={billingNotice.kind === "error" ? "alert" : "status"}>{billingNotice.text}</div>}
+                    <div className="grid gap-4 md:grid-cols-2">
+                      <div className={`rounded-2xl bg-slate-50 p-5 ${usage.plan === "free" ? "ring-2 ring-lilac" : "ring-1 ring-slate-200"}`}>
+                        <div className="flex items-start justify-between gap-3"><div><h3 className="text-lg font-bold text-ink">Free</h3><p className="mt-1 text-2xl font-bold text-ink">$0</p></div>{usage.plan === "free" && <span className="rounded-full bg-lilac/10 px-2.5 py-1 text-xs font-semibold text-lilac">Current plan</span>}</div>
+                        <dl className="mt-5 space-y-3 text-sm"><div className="flex justify-between gap-3"><dt className="text-slate-500">Documents</dt><dd className="font-semibold text-ink">5</dd></div><div className="flex justify-between gap-3"><dt className="text-slate-500">Source text</dt><dd className="font-semibold text-ink">500 KiB</dd></div><div className="flex justify-between gap-3"><dt className="text-slate-500">Each file</dt><dd className="font-semibold text-ink">100 KiB</dd></div><div className="flex justify-between gap-3"><dt className="text-slate-500">AI requests</dt><dd className="font-semibold text-ink">100 / month</dd></div></dl>
+                        <Button className="mt-6 w-full" type="button" variant="secondary" onClick={() => void changePlan("free")} disabled={billingBusy || usage.plan === "free"}>{billingBusy && usage.plan === "pro" ? "Changing…" : usage.plan === "free" ? "Current plan" : "Downgrade to Free"}</Button>
+                      </div>
+                      <div className={`rounded-2xl bg-lilac/5 p-5 ${usage.plan === "pro" ? "ring-2 ring-lilac" : "ring-1 ring-lilac/30"}`}>
+                        <div className="flex items-start justify-between gap-3"><div><h3 className="text-lg font-bold text-ink">Pro</h3><p className="mt-1 text-2xl font-bold text-ink">$19 <span className="text-sm font-medium text-slate-500">/ month (illustrative)</span></p></div>{usage.plan === "pro" && <span className="rounded-full bg-lilac/10 px-2.5 py-1 text-xs font-semibold text-lilac">Current plan</span>}</div>
+                        <dl className="mt-5 space-y-3 text-sm"><div className="flex justify-between gap-3"><dt className="text-slate-500">Documents</dt><dd className="font-semibold text-ink">25</dd></div><div className="flex justify-between gap-3"><dt className="text-slate-500">Source text</dt><dd className="font-semibold text-ink">2500 KiB</dd></div><div className="flex justify-between gap-3"><dt className="text-slate-500">Each file</dt><dd className="font-semibold text-ink">100 KiB</dd></div><div className="flex justify-between gap-3"><dt className="text-slate-500">AI requests</dt><dd className="font-semibold text-ink">1000 / month</dd></div></dl>
+                        <Button className="mt-6 w-full" type="button" onClick={() => void changePlan("pro")} disabled={billingBusy || usage.plan === "pro"}>{billingBusy && usage.plan === "free" ? "Changing…" : usage.plan === "pro" ? "Current plan" : "Upgrade to Pro"}</Button>
+                      </div>
+                    </div>
+                  </Card>
+
+                  <aside className="space-y-5">
+                    <Card className="p-5"><h2 className="font-semibold text-ink">Current usage</h2><p className="mt-1 text-sm font-semibold text-lilac">{usage.plan === "pro" ? "Pro" : "Free"}</p><dl className="mt-4 space-y-3 text-sm"><div className="flex justify-between gap-3"><dt className="text-slate-500">AI requests</dt><dd className="font-semibold text-ink">{usage.used} / {usage.limit}</dd></div><div className="flex justify-between gap-3"><dt className="text-slate-500">Documents</dt><dd className="font-semibold text-ink">{documents.length}</dd></div><div className="flex justify-between gap-3"><dt className="text-slate-500">Source text</dt><dd className="font-semibold text-ink">{formatBytes(totalSourceBytes)}</dd></div></dl><p className="mt-4 text-xs leading-5 text-slate-500">Your allowance resets {nextMonthResetUtc()}.</p></Card>
+                    <Card className="p-5"><h2 className="font-semibold text-ink">No charge</h2><p className="mt-2 text-sm leading-6 text-slate-500">Plan changes are mock only. Existing documents, conversations, and UTC monthly usage stay in place when you switch plans.</p></Card>
+                  </aside>
+                </div>
               </section>
             ) : (
               <section role="tabpanel" aria-label="Settings">

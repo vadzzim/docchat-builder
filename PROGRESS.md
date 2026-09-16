@@ -68,3 +68,12 @@ Root's live browser checks covered confirmation and recovery links (including ex
 - Added `demo/server.mjs` and `npm run demo`. It serves only the synthetic Northstar Bikes page on `127.0.0.1:3001`, reads `?bot_id=` or `DOCCHAT_BOT_ID`, and injects the actual local widget snippet. It does not expose filesystem routes.
 
 Root verified the real external-page journey, private/published transitions, invalid origins, immediate unpublish, shared usage, owner/visitor history separation, absent owner Authorization headers, Escape/focus return, preserved hidden transcript, a 390px layout with visible composer, real expired-session renewal without the old conversation id, head placement, and recovery after a stalled session request. The demo rejects filesystem paths. Independent review findings were fixed and rechecked. TypeScript, production build, loader/demo syntax checks, and `git diff --check` pass.
+
+## Mock billing slice
+
+- Added owner-authenticated `POST /functions/v1/mock-billing` with `{ "plan": "free" | "pro" }`. The verified bearer user supplies the account id; caller-supplied `account_id` fields are rejected, and the browser never receives a service credential.
+- Added service-only `set_mock_account_plan` RPC with an account-row lock. It changes only `accounts.plan`, preserving monthly usage, documents, conversations, and source files. The response explicitly marks the change as mock and uncharged.
+- Added a Billing tab showing the Free `$0` and Pro `$19 / month (illustrative)` limits, current document/source/request usage, and the UTC monthly reset. Downgrades confirm that data is preserved and explain when Free uploads remain blocked above its limits; the UI refreshes the server plan and usage after a change.
+- Added `scripts/billing-integration.mjs` and `npm run test:billing` coverage for unauthenticated and direct writes, account spoofing, usage-preserving plan changes, concurrent plan/quota locking, six Pro documents surviving downgrade, Free upload rejection at the cap, and slot release/recovery. The runner cleans test files, tombstones, and users without printing runtime keys.
+
+Root verified real browser Free → Pro → Free transitions with unchanged usage and documents, the corrected 320px layout, and a failed post-mutation usage read that still displays the committed plan. Independent authorization/locking review passed. The live billing runner, TypeScript, production build, script syntax, and diff checks pass.

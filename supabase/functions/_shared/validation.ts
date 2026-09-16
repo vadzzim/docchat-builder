@@ -36,6 +36,10 @@ export const botSettingsSchema = z.object({
   message: "At least one setting is required.",
 });
 
+export const mockBillingSchema = z.object({
+  plan: z.enum(["free", "pro"]),
+}).strict();
+
 export const documentIdSchema = z.object({ document_id: uuidSchema });
 
 export const publicSessionSchema = z.object({ bot_id: uuidSchema, embed_origin: originSchema });
