@@ -5,6 +5,7 @@ import type { Session } from "@supabase/supabase-js";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { createSupabaseBrowserClient } from "@/lib/supabase-browser";
+import { readSse, SseStreamError, type SseEvent } from "@/lib/sse-client";
 
 const supabase = createSupabaseBrowserClient();
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
@@ -46,20 +47,12 @@ type DisplayMessage = StoredMessage & {
   incomplete?: boolean;
 };
 
-type StreamEvent = {
-  event: string;
-  data: unknown;
-};
-
 type StreamFailure = Error & { code?: string };
 
-class ChatRequestError extends Error {
-  code?: string;
-
+class ChatRequestError extends SseStreamError {
   constructor(message: string, code?: string) {
-    super(message);
+    super(message, code);
     this.name = "ChatRequestError";
-    this.code = code;
   }
 }
 
@@ -82,59 +75,10 @@ async function parseErrorResponse(response: Response): Promise<ChatRequestError>
   return new ChatRequestError(`Chat request failed (${response.status}).`);
 }
 
-async function readSse(response: Response, onEvent: (event: StreamEvent) => void, signal: AbortSignal): Promise<void> {
-  if (!response.body) throw new ChatRequestError("The chat stream did not include a response body.");
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = "";
-  let eventName = "message";
-  let dataLines: string[] = [];
-
-  const dispatch = () => {
-    if (dataLines.length === 0) return;
-    let data: unknown;
-    try {
-      data = JSON.parse(dataLines.join("\n"));
-    } catch {
-      throw new ChatRequestError("The chat returned malformed streaming data.");
-    }
-    onEvent({ event: eventName, data });
-    eventName = "message";
-    dataLines = [];
-  };
-
-  const readLine = (line: string) => {
-    if (line === "") {
-      dispatch();
-    } else if (line.startsWith("event:")) {
-      eventName = line.slice(6).trim() || "message";
-    } else if (line.startsWith("data:")) {
-      dataLines.push(line.slice(5).trimStart());
-    }
-  };
-
-  try {
-    while (true) {
-      if (signal.aborted) throw new DOMException("The chat request was cancelled.", "AbortError");
-      const { value, done } = await reader.read();
-      if (done) break;
-      buffer += decoder.decode(value, { stream: true });
-      const lines = buffer.split(/\r?\n/);
-      buffer = lines.pop() ?? "";
-      for (const line of lines) readLine(line);
-    }
-    buffer += decoder.decode();
-    if (buffer) readLine(buffer);
-    dispatch();
-  } finally {
-    reader.releaseLock();
-  }
-}
-
 async function streamChat(
   session: Session,
   body: Record<string, unknown>,
-  onEvent: (event: StreamEvent) => void,
+  onEvent: (event: SseEvent) => void,
   signal: AbortSignal,
 ): Promise<void> {
   let response: Response;
@@ -216,6 +160,7 @@ export function ChatPanel({
   const [historyError, setHistoryError] = useState<string | null>(null);
   const streamController = useRef<AbortController | null>(null);
   const streamingRef = useRef(false);
+  const transcriptRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (!streamingRef.current && selectedConversationId && !conversations.some((conversation) => conversation.id === selectedConversationId)) {
@@ -228,6 +173,11 @@ export function ChatPanel({
     streamController.current?.abort();
     streamingRef.current = false;
   }, []);
+
+  useEffect(() => {
+    const transcript = transcriptRef.current;
+    if (transcript) transcript.scrollTop = transcript.scrollHeight;
+  }, [messages]);
 
   useEffect(() => {
     if (!selectedConversationId || streamingRef.current) {
@@ -423,7 +373,7 @@ export function ChatPanel({
           </div>
         ) : (
           <>
-            <div className="flex-1 space-y-4 overflow-y-auto py-6" role="log" aria-live="polite" aria-label="Chat transcript">
+            <div ref={transcriptRef} className="min-h-0 max-h-[34rem] flex-1 space-y-4 overflow-y-auto py-6" role="log" aria-live="polite" aria-label="Chat transcript">
               {loadingHistory ? (
                 <p className="text-center text-sm text-slate-400" role="status">Loading conversation…</p>
               ) : historyError ? (

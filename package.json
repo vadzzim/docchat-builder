@@ -6,6 +6,7 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
+    "demo": "node demo/server.mjs",
     "typecheck": "tsc --noEmit",
     "lint": "tsc --noEmit",
     "test:ingestion": "node scripts/ingestion-integration.mjs",

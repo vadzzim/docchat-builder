@@ -57,3 +57,14 @@
 - Added `lib/edge-client.ts` for browser-safe Edge Function calls; it sends only the public Supabase URL/anon key and never exposes service credentials. Local auth redirects explicitly allow both `127.0.0.1:3000` and `localhost:3000`.
 
 Root's live browser checks covered confirmation and recovery links (including expired/reused and literal-percent errors), isolated owner signup and bot creation, three real document uploads and processing, grounded streamed answers with citations and restored history, insufficient-information responses, invalid/oversized input, sign-out/sign-in, and a 390px no-overflow layout. The direct TypeScript compiler and `pnpm build` pass for this slice.
+
+## External widget and publishing slice
+
+- Added a Settings tab for owner-editable bot name, greeting, accent color, allowed website origins, and explicit public-chat enable/disable. The confirmation copy explains that answers and cited excerpts become public, original files remain private, and origins supplement server-side controls rather than authenticate visitors.
+- Added a selectable/copyable `widget.js` snippet. The loader derives the app origin from its own script URL, requests `public-session` from the actual embedding page without an anon key, and sends the visitor token to the iframe only after exact `event.source` and origin checks. The token is never placed in the iframe URL.
+- Added `/widget` with a compact visitor chat that uses native fetch and the scoped visitor token only. The iframe validates its parent source and exact origin before accepting the session, streams buffered SSE answers, keeps incomplete replies visibly incomplete, supports source excerpts, New chat, close, Escape, and preserves state while hidden.
+- The widget panel keeps its transcript scrollable while the composer stays visible, mounts safely when a snippet is placed in the document head, and bounds the loader's public-session request with a 15-second timeout.
+- An expired visitor session clears its token, conversation, and transcript before showing an explicit reconnect action; it never retries the failed question with a replacement session.
+- Added `demo/server.mjs` and `npm run demo`. It serves only the synthetic Northstar Bikes page on `127.0.0.1:3001`, reads `?bot_id=` or `DOCCHAT_BOT_ID`, and injects the actual local widget snippet. It does not expose filesystem routes.
+
+Root verified the real external-page journey, private/published transitions, invalid origins, immediate unpublish, shared usage, owner/visitor history separation, absent owner Authorization headers, Escape/focus return, preserved hidden transcript, a 390px layout with visible composer, real expired-session renewal without the old conversation id, head placement, and recovery after a stalled session request. The demo rejects filesystem paths. Independent review findings were fixed and rechecked. TypeScript, production build, loader/demo syntax checks, and `git diff --check` pass.

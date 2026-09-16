@@ -16,7 +16,7 @@ const processingPollMilliseconds = 2000;
 const processingPollWindowMilliseconds = 180000;
 
 type Plan = "free" | "pro";
-type Tab = "knowledge" | "chat";
+type Tab = "knowledge" | "chat" | "settings";
 type Notice = { kind: "error" | "success"; text: string } | null;
 
 type Bot = ChatBot & {
@@ -91,6 +91,17 @@ function planLimits(plan: Plan) {
     : { documents: 5, sourceBytes: 512000, monthly: 100 };
 }
 
+function normalizeOriginInput(value: string): string | null {
+  try {
+    const origin = new URL(value.trim());
+    if (!["http:", "https:"].includes(origin.protocol) || origin.username || origin.password ||
+      origin.pathname !== "/" || origin.search || origin.hash) return null;
+    return origin.origin;
+  } catch {
+    return null;
+  }
+}
+
 export default function DashboardPage() {
   const router = useRouter();
   const [session, setSession] = useState<Session | null>(null);
@@ -109,6 +120,14 @@ export default function DashboardPage() {
   const [creatingBot, setCreatingBot] = useState(false);
   const [activeDocumentId, setActiveDocumentId] = useState<string | null>(null);
   const [deletingDocumentId, setDeletingDocumentId] = useState<string | null>(null);
+  const [settingsName, setSettingsName] = useState("");
+  const [settingsGreeting, setSettingsGreeting] = useState("");
+  const [settingsAccent, setSettingsAccent] = useState("#7064D8");
+  const [settingsOrigins, setSettingsOrigins] = useState("");
+  const [settingsPublic, setSettingsPublic] = useState(false);
+  const [settingsBusy, setSettingsBusy] = useState(false);
+  const [settingsNotice, setSettingsNotice] = useState<Notice>(null);
+  const [snippetNotice, setSnippetNotice] = useState<string | null>(null);
 
   const loadUsage = useCallback(async (activeSession: Session) => {
     const [accountResult, usageResult] = await Promise.all([
@@ -184,6 +203,15 @@ export default function DashboardPage() {
     if (session) void loadDashboard(session);
   }, [session, loadDashboard]);
 
+  useEffect(() => {
+    if (!bot) return;
+    setSettingsName(bot.name);
+    setSettingsGreeting(bot.greeting);
+    setSettingsAccent(bot.accent_color);
+    setSettingsOrigins(bot.allowed_origins.join("\n"));
+    setSettingsPublic(bot.public_enabled);
+  }, [bot]);
+
   const limits = planLimits(usage.plan);
   const totalSourceBytes = useMemo(() => documents.reduce((total, document) => total + document.source_size_bytes, 0), [documents]);
   const readyDocuments = useMemo(() => documents.filter((document) => document.status === "ready"), [documents]);
@@ -229,6 +257,59 @@ export default function DashboardPage() {
       setNotice({ kind: "error", text: error instanceof Error ? error.message : "Your bot could not be created." });
     } finally {
       setCreatingBot(false);
+    }
+  }
+
+  async function saveSettings(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!session || !bot || settingsBusy) return;
+    const rawOrigins = settingsOrigins.split(/\r?\n/).map((origin) => origin.trim()).filter(Boolean);
+    const origins: string[] = [];
+    for (const rawOrigin of rawOrigins) {
+      const normalized = normalizeOriginInput(rawOrigin);
+      if (!normalized) {
+        setSettingsNotice({ kind: "error", text: `Invalid website origin: ${rawOrigin}. Use a plain http(s) origin such as https://example.com.` });
+        return;
+      }
+      if (!origins.includes(normalized)) origins.push(normalized);
+    }
+    if (settingsPublic && origins.length === 0) {
+      setSettingsNotice({ kind: "error", text: "Add at least one website origin before enabling public chat." });
+      return;
+    }
+    setSettingsBusy(true);
+    setSettingsNotice(null);
+    try {
+      const result = await callEdgeFunction<BotResponse>("bot-settings", session, {
+        bot_id: bot.id,
+        name: settingsName.trim(),
+        greeting: settingsGreeting.trim(),
+        accent_color: settingsAccent,
+        public_enabled: settingsPublic,
+        allowed_origins: origins,
+      });
+      if (!result.response.ok || !result.data.bot) throw new Error(edgeError(result.data, "Your bot settings could not be saved."));
+      setBot(result.data.bot);
+      setSettingsNotice({ kind: "success", text: settingsPublic ? "Public chat is enabled for the selected origins." : "Your bot settings were saved. Public chat is off." });
+    } catch (error) {
+      setSettingsNotice({ kind: "error", text: error instanceof Error ? error.message : "Your bot settings could not be saved." });
+    } finally {
+      setSettingsBusy(false);
+    }
+  }
+
+  const embedSnippet = useMemo(() => {
+    if (!bot || typeof window === "undefined") return "";
+    return `<script src="${window.location.origin}/widget.js" data-bot-id="${bot.id}" data-api-url="${process.env.NEXT_PUBLIC_SUPABASE_URL}"></script>`;
+  }, [bot]);
+
+  async function copyEmbedSnippet() {
+    if (!embedSnippet) return;
+    try {
+      await navigator.clipboard.writeText(embedSnippet);
+      setSnippetNotice("Embed snippet copied.");
+    } catch {
+      setSnippetNotice("Select the snippet and copy it from your browser.");
     }
   }
 
@@ -370,7 +451,7 @@ export default function DashboardPage() {
           <div>
             <p className="mb-2 text-xs font-bold uppercase tracking-[0.18em] text-lilac">Owner workspace</p>
             <h1 className="text-3xl font-bold tracking-tight text-ink sm:text-4xl">Build your support chat</h1>
-            <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-500">Keep your source files private, test grounded answers, and review the citations before you publish later.</p>
+            <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-500">Keep your source files private, test grounded answers, and review the citations before you make the bot public.</p>
           </div>
           {refreshing && <p className="text-sm text-slate-400" role="status">Refreshing…</p>}
         </div>
@@ -394,7 +475,7 @@ export default function DashboardPage() {
               </div>
               <div>
                 <label className="mb-1.5 block text-sm font-semibold text-ink" htmlFor="bot-accent">Accent color</label>
-                <div className="flex items-center gap-3"><input id="bot-accent" type="color" value={botAccent} onChange={(event) => setBotAccent(event.target.value)} className="h-10 w-14 cursor-pointer rounded-lg border-0 bg-transparent" disabled={creatingBot} /><span className="text-sm text-slate-500">Used for future widget accents.</span></div>
+                <div className="flex items-center gap-3"><input id="bot-accent" type="color" value={botAccent} onChange={(event) => setBotAccent(event.target.value)} className="h-10 w-14 cursor-pointer rounded-lg border-0 bg-transparent" disabled={creatingBot} /><span className="text-sm text-slate-500">Choose a color for your assistant.</span></div>
               </div>
               <Button type="submit" disabled={creatingBot || !botName.trim()}>{creatingBot ? "Creating…" : "Create bot"}</Button>
             </form>
@@ -416,6 +497,7 @@ export default function DashboardPage() {
             <div className="mb-6 flex gap-2 border-b border-slate-200" role="tablist" aria-label="Workspace sections">
               <button type="button" role="tab" aria-selected={tab === "knowledge"} className={`border-b-2 px-3 py-3 text-sm font-semibold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-lilac ${tab === "knowledge" ? "border-lilac text-ink" : "border-transparent text-slate-500 hover:text-ink"}`} onClick={() => setTab("knowledge")}>Knowledge</button>
               <button type="button" role="tab" aria-selected={tab === "chat"} className={`border-b-2 px-3 py-3 text-sm font-semibold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-lilac ${tab === "chat" ? "border-lilac text-ink" : "border-transparent text-slate-500 hover:text-ink"}`} onClick={() => setTab("chat")}>Chat</button>
+              <button type="button" role="tab" aria-selected={tab === "settings"} className={`border-b-2 px-3 py-3 text-sm font-semibold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-lilac ${tab === "settings" ? "border-lilac text-ink" : "border-transparent text-slate-500 hover:text-ink"}`} onClick={() => setTab("settings")}>Settings</button>
             </div>
 
             {tab === "knowledge" ? (
@@ -423,7 +505,7 @@ export default function DashboardPage() {
                 <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_18rem]">
                   <Card className="p-5 sm:p-6">
                     <div className="flex flex-col justify-between gap-4 sm:flex-row sm:items-start">
-                      <div><h2 className="text-xl font-bold text-ink">Source documents</h2><p className="mt-1 text-sm leading-6 text-slate-500">Upload UTF-8 TXT or Markdown files. The server checks every limit before storing them.</p></div>
+                      <div><h2 className="text-xl font-bold text-ink">Source documents</h2><p className="mt-1 text-sm leading-6 text-slate-500">Upload UTF-8 TXT or Markdown files that your assistant can use.</p></div>
                       <label className={`inline-flex cursor-pointer items-center justify-center rounded-xl bg-ink px-4 py-2 text-sm font-semibold text-white transition hover:bg-slate-700 focus-within:outline-none focus-within:ring-2 focus-within:ring-lilac focus-within:ring-offset-2 ${hasActiveProcessing ? "cursor-not-allowed opacity-50" : ""}`}>
                         <span>{hasActiveProcessing ? "Processing…" : "Upload document"}</span>
                         <input className="sr-only" type="file" accept=".txt,.md,text/plain,text/markdown" onChange={uploadDocument} disabled={hasActiveProcessing} />
@@ -443,7 +525,7 @@ export default function DashboardPage() {
                           {document.process_error && <p className="mt-3 rounded-xl bg-white px-3 py-2 text-sm leading-5 text-rose-700">{document.process_error}</p>}
                           <div className="mt-3 flex flex-wrap items-center gap-3">
                             {canProcess && <Button type="button" variant="secondary" onClick={() => void processDocument(document.id)} disabled={Boolean(activeDocumentId)}>{document.status === "error" ? "Retry processing" : "Process"}</Button>}
-                            {document.status === "processing" && <span className="text-xs text-amber-700">Embedding source text… this can take up to two minutes.</span>}
+                            {document.status === "processing" && <span className="text-xs text-amber-700">Preparing your document for chat… this can take up to two minutes.</span>}
                             <Button type="button" variant="ghost" onClick={() => void deleteDocument(document)} disabled={deletingDocumentId === document.id || Boolean(activeDocumentId)}>{deletingDocumentId === document.id ? "Deleting…" : "Delete"}</Button>
                           </div>
                         </div>;
@@ -453,13 +535,56 @@ export default function DashboardPage() {
 
                   <aside className="space-y-5">
                     <Card className="p-5"><h2 className="font-semibold text-ink">Plan limits</h2><p className="mt-1 text-sm font-semibold text-lilac">{usage.plan === "pro" ? "Pro" : "Free"}</p><dl className="mt-4 space-y-3 text-sm"><div className="flex justify-between gap-3"><dt className="text-slate-500">Documents</dt><dd className="font-semibold text-ink">{documents.length} / {limits.documents}</dd></div><div className="flex justify-between gap-3"><dt className="text-slate-500">Source text</dt><dd className="font-semibold text-ink">{formatBytes(totalSourceBytes)} / {formatBytes(limits.sourceBytes)}</dd></div><div className="flex justify-between gap-3"><dt className="text-slate-500">Each file</dt><dd className="font-semibold text-ink">100 KiB max</dd></div><div className="flex justify-between gap-3"><dt className="text-slate-500">AI requests</dt><dd className="font-semibold text-ink">{usage.used} / {usage.limit}</dd></div></dl><p className="mt-4 text-xs leading-5 text-slate-400">Your server plan controls these limits. Usage counts owner and visitor chats together.</p></Card>
-                    <Card className="p-5"><h2 className="font-semibold text-ink">Private by default</h2><p className="mt-2 text-sm leading-6 text-slate-500">Your original files stay private while you test. Publishing and allowed website origins will be available after the owner flow is verified.</p></Card>
+                    <Card className="p-5"><h2 className="font-semibold text-ink">Private by default</h2><p className="mt-2 text-sm leading-6 text-slate-500">Your original files stay private while you test. When you are ready, choose which websites may use this bot.</p></Card>
                   </aside>
                 </div>
               </section>
-            ) : (
+            ) : tab === "chat" ? (
               <section role="tabpanel" aria-label="Chat">
                 <ChatPanel session={session} bot={bot} conversations={conversations} hasReadyDocuments={readyDocuments.length > 0} onConversationsChange={setConversations} onUsageRefresh={refreshUsage} />
+              </section>
+            ) : (
+              <section role="tabpanel" aria-label="Settings">
+                <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_20rem]">
+                  <Card className="p-5 sm:p-6">
+                    <div className="mb-6"><p className="mb-2 text-xs font-bold uppercase tracking-[0.16em] text-lilac">Bot settings</p><h2 className="text-xl font-bold text-ink">Shape your assistant</h2><p className="mt-1 text-sm leading-6 text-slate-500">Update the details visitors will see when the bot is ready to go live.</p></div>
+                    {settingsNotice && <div className={`mb-5 rounded-xl px-4 py-3 text-sm leading-6 ${settingsNotice.kind === "error" ? "bg-rose-50 text-rose-700" : "bg-emerald-50 text-emerald-700"}`} role={settingsNotice.kind === "error" ? "alert" : "status"}>{settingsNotice.text}</div>}
+                    <form className="space-y-5" onSubmit={saveSettings}>
+                      <div>
+                        <label className="mb-1.5 block text-sm font-semibold text-ink" htmlFor="settings-name">Bot name</label>
+                        <Input id="settings-name" required maxLength={80} value={settingsName} onChange={(event) => setSettingsName(event.target.value)} disabled={settingsBusy} />
+                      </div>
+                      <div>
+                        <label className="mb-1.5 block text-sm font-semibold text-ink" htmlFor="settings-greeting">Greeting</label>
+                        <textarea id="settings-greeting" required maxLength={500} rows={3} value={settingsGreeting} onChange={(event) => setSettingsGreeting(event.target.value)} className="w-full resize-y rounded-xl border-0 bg-slate-50 px-3 py-2.5 text-sm leading-6 text-ink outline-none ring-1 ring-slate-200 placeholder:text-slate-400 focus:bg-white focus:ring-2 focus:ring-lilac disabled:cursor-not-allowed disabled:opacity-60" disabled={settingsBusy} />
+                      </div>
+                      <div>
+                        <label className="mb-1.5 block text-sm font-semibold text-ink" htmlFor="settings-accent">Accent color</label>
+                        <div className="flex items-center gap-3"><input id="settings-accent" type="color" value={settingsAccent} onChange={(event) => setSettingsAccent(event.target.value)} className="h-10 w-14 cursor-pointer rounded-lg border-0 bg-transparent" disabled={settingsBusy} /><span className="text-sm text-slate-500">Used for your assistant's chat controls.</span></div>
+                      </div>
+                      <div>
+                        <label className="mb-1.5 block text-sm font-semibold text-ink" htmlFor="settings-origins">Allowed website origins</label>
+                        <textarea id="settings-origins" rows={4} value={settingsOrigins} onChange={(event) => setSettingsOrigins(event.target.value)} className="w-full resize-y rounded-xl border-0 bg-slate-50 px-3 py-2.5 text-sm leading-6 text-ink outline-none ring-1 ring-slate-200 placeholder:text-slate-400 focus:bg-white focus:ring-2 focus:ring-lilac disabled:cursor-not-allowed disabled:opacity-60" placeholder="https://www.example.com&#10;https://help.example.com" disabled={settingsBusy} />
+                        <p className="mt-2 text-xs leading-5 text-slate-500">One plain http(s) origin per line. Paths and query strings are not allowed.</p>
+                      </div>
+                      <div className="rounded-2xl bg-slate-50 px-4 py-4">
+                        <div className="flex items-start justify-between gap-4"><div><p className="font-semibold text-ink">Public chat</p><p className="mt-1 text-sm leading-6 text-slate-500">Allow the widget to answer visitors from the origins above.</p></div><label className="relative inline-flex shrink-0 cursor-pointer items-center"><span className="sr-only">Enable public chat</span><input type="checkbox" className="peer sr-only" checked={settingsPublic} onChange={(event) => {
+                          const nextValue = event.target.checked;
+                          if (nextValue && !bot.public_enabled && !window.confirm("Enable public chat? Answers and cited excerpts from your documents will be visible to visitors. Original files stay private. Website origins add an extra access boundary but are not authentication. Continue?")) return;
+                          setSettingsPublic(nextValue);
+                          setSettingsNotice(null);
+                        }} disabled={settingsBusy} /><span aria-hidden="true" className="h-6 w-11 rounded-full bg-slate-300 transition peer-checked:bg-lilac peer-focus-visible:ring-2 peer-focus-visible:ring-lilac peer-focus-visible:ring-offset-2 after:absolute after:left-1 after:top-1 after:h-4 after:w-4 after:rounded-full after:bg-white after:transition peer-checked:after:translate-x-5" /></label></div>
+                        <p className="mt-3 text-xs leading-5 text-slate-500">When enabled, visitor answers and the cited excerpts that support them become public. Your original source files remain private. Allowed origins supplement server-side abuse controls and do not authenticate a visitor.</p>
+                      </div>
+                      <Button type="submit" disabled={settingsBusy}>{settingsBusy ? "Saving…" : "Save settings"}</Button>
+                    </form>
+                  </Card>
+
+                  <aside className="space-y-5">
+                    <Card className="p-5"><h2 className="font-semibold text-ink">Embed your bot</h2><p className="mt-2 text-sm leading-6 text-slate-500">After enabling public chat, place this snippet on an allowed website.</p><textarea readOnly aria-label="Embed snippet" className="mt-4 min-h-28 w-full resize-y rounded-xl bg-slate-50 px-3 py-2.5 font-mono text-xs leading-5 text-slate-600 outline-none ring-1 ring-slate-200 focus:ring-2 focus:ring-lilac" value={embedSnippet} onFocus={(event) => event.currentTarget.select()} /><div className="mt-3 flex items-center gap-3"><Button type="button" variant="secondary" onClick={() => void copyEmbedSnippet()} disabled={!embedSnippet}>Copy snippet</Button>{snippetNotice && <span className="text-xs text-slate-500" role="status">{snippetNotice}</span>}</div><p className="mt-4 text-xs leading-5 text-slate-500">The loader requests a short-lived visitor session from the embedding website. It does not need an owner login or a browser secret.</p></Card>
+                    <Card className="p-5"><h2 className="font-semibold text-ink">Ready when you are</h2><p className="mt-2 text-sm leading-6 text-slate-500">Keep public chat off while you test. When you publish, only the website origins you list can request a visitor session.</p></Card>
+                  </aside>
+                </div>
               </section>
             )}
           </>
