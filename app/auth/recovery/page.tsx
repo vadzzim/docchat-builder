@@ -1,11 +1,18 @@
 "use client";
 
-import { type FormEvent, useEffect, useState } from "react";
+import { type FormEvent, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-import { createSupabaseBrowserClient } from "@/lib/supabase-browser";
+import {
+  awaitRecoveryInitialization,
+  clearRecoveryProof,
+  createSupabaseBrowserClient,
+  getRecoverySession,
+  hasRecoveryAttempt,
+  onRecoveryStateChange,
+} from "@/lib/supabase-browser";
 
 type Notice = { kind: "error" | "success"; text: string } | null;
 
@@ -20,16 +27,6 @@ function linkError(): string | null {
   return search.get("error_description") ?? hash.get("error_description") ?? "This reset link could not be verified.";
 }
 
-function hasRecoveryProof(): boolean {
-  const search = new URLSearchParams(window.location.search);
-  const hash = new URLSearchParams(window.location.hash.replace(/^#/, ""));
-  return Boolean(
-    search.get("type") === "recovery" || hash.get("type") === "recovery" ||
-    search.get("code") || search.get("token_hash") || hash.get("token_hash") ||
-    hash.get("access_token") || hash.get("refresh_token"),
-  );
-}
-
 export default function RecoveryPage() {
   const router = useRouter();
   const [checking, setChecking] = useState(true);
@@ -38,35 +35,52 @@ export default function RecoveryPage() {
   const [confirmation, setConfirmation] = useState("");
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<Notice>(null);
+  const completedRef = useRef(false);
 
   useEffect(() => {
     let mounted = true;
     const initialError = linkError();
-    const validLink = !initialError && hasRecoveryProof();
-    if (!validLink) {
+    const showError = (text: string) => {
+      if (!mounted) return;
       setHasSession(false);
-      setNotice({ kind: "error", text: initialError ?? "This reset link is missing or expired." });
+      setNotice({ kind: "error", text });
       setChecking(false);
-      return () => {
-        mounted = false;
-      };
-    }
-    const subscription = supabase.auth.onAuthStateChange((event, session) => {
-      if (!mounted) return;
-      if (event === "PASSWORD_RECOVERY" || session) {
+    };
+    const syncRecovery = () => {
+      if (!mounted || initialError || completedRef.current) return;
+      const session = getRecoverySession();
+      if (session) {
         setHasSession(true);
+        setNotice(null);
         setChecking(false);
+      } else if (!hasRecoveryAttempt()) {
+        showError("This reset link is invalid or expired.");
       }
-    });
-    void supabase.auth.getSession().then(({ data }) => {
-      if (!mounted) return;
-      setHasSession(Boolean(data.session));
-      if (!data.session) setNotice({ kind: "error", text: "This reset link is invalid or expired." });
-      setChecking(false);
-    });
+    };
+    const unsubscribe = onRecoveryStateChange(syncRecovery);
+    syncRecovery();
+    if (initialError) {
+      clearRecoveryProof();
+      showError(initialError);
+    } else if (!getRecoverySession() && !hasRecoveryAttempt()) {
+      showError("This reset link is missing or expired.");
+    } else if (!getRecoverySession()) {
+      void awaitRecoveryInitialization()
+        .then(() => {
+          if (mounted && !completedRef.current && !getRecoverySession()) {
+            clearRecoveryProof();
+            showError("This reset link is invalid or expired.");
+          }
+        })
+        .catch(() => {
+          if (!mounted || completedRef.current) return;
+          clearRecoveryProof();
+          showError("This reset link is invalid or expired.");
+        });
+    }
     return () => {
       mounted = false;
-      subscription.data.subscription.unsubscribe();
+      unsubscribe();
     };
   }, []);
 
@@ -80,6 +94,11 @@ export default function RecoveryPage() {
       setNotice({ kind: "error", text: "The passwords do not match." });
       return;
     }
+    if (!getRecoverySession()) {
+      setHasSession(false);
+      setNotice({ kind: "error", text: "This reset link is invalid or expired." });
+      return;
+    }
     setBusy(true);
     setNotice(null);
     const { error } = await supabase.auth.updateUser({ password });
@@ -88,6 +107,8 @@ export default function RecoveryPage() {
     } else {
       setPassword("");
       setConfirmation("");
+      completedRef.current = true;
+      clearRecoveryProof();
       setNotice({ kind: "success", text: "Your password has been updated. You can now open your workspace." });
     }
     setBusy(false);

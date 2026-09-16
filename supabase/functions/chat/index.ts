@@ -261,10 +261,11 @@ Deno.serve(async (request) => {
                   answer += token;
                   if (!send("token", { token })) return;
                 }
-              } catch {
+              } catch (error) {
                 if (deadlineController.signal.aborted) {
                   throw new HttpError(504, "Chat timed out. Please try again.", "chat_timeout");
                 }
+                if (error instanceof HttpError) throw error;
                 throw providerError();
               }
             }

@@ -1,5 +1,5 @@
 import { errorResponse, json, preflight, requirePost } from "../_shared/http.ts";
-import { createAdminClient, requireUser } from "../_shared/supabase.ts";
+import { requireUser } from "../_shared/supabase.ts";
 import { createBotSchema, parseJson } from "../_shared/validation.ts";
 
 Deno.serve(async (request) => {
@@ -30,4 +30,3 @@ Deno.serve(async (request) => {
     return errorResponse(request, error);
   }
 });
-

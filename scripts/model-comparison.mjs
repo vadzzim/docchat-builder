@@ -104,6 +104,7 @@ async function streamChat(model, messages) {
         if (body.error) throw new Error("Ollama provider returned an error.");
         answer += String(body.message?.content ?? body.response ?? "");
         if (body.done) {
+          if (body.done_reason === "length") throw new Error("Ollama answer was truncated by the response length limit.");
           sawDone = true;
           break;
         }
@@ -119,6 +120,7 @@ async function streamChat(model, messages) {
       }
       if (body.error) throw new Error("Ollama provider returned an error.");
       answer += String(body.message?.content ?? body.response ?? "");
+      if (body.done && body.done_reason === "length") throw new Error("Ollama answer was truncated by the response length limit.");
       sawDone = Boolean(body.done);
     }
     assert(sawDone, "Ollama stream ended before completion.");

@@ -55,12 +55,7 @@
   panel.id = "docchat-widget-panel";
   panel.hidden = true;
   panel.setAttribute("aria-label", "DocChat");
-  var iframe = document.createElement("iframe");
-  iframe.className = "frame";
-  iframe.title = "DocChat support chat";
-  iframe.referrerPolicy = "no-referrer";
-  iframe.src = appOrigin + "/widget?bot_id=" + encodeURIComponent(botId) + "&parent_origin=" + encodeURIComponent(parentOrigin);
-  panel.appendChild(iframe);
+  var iframe = null;
 
   var status = document.createElement("div");
   status.className = "status";
@@ -90,8 +85,22 @@
   var requestInFlight = false;
   var requestController = null;
 
+  function ensureIframe() {
+    if (iframe) return;
+    iframe = document.createElement("iframe");
+    iframe.className = "frame";
+    iframe.title = "DocChat support chat";
+    iframe.referrerPolicy = "no-referrer";
+    iframe.src = appOrigin + "/widget?bot_id=" + encodeURIComponent(botId) + "&parent_origin=" + encodeURIComponent(parentOrigin);
+    panel.insertBefore(iframe, status);
+  }
+
   function setOpen(nextOpen) {
     open = nextOpen;
+    if (open) {
+      ensureIframe();
+      if (!iframeReady && !sessionPayload && !requestInFlight) requestSession();
+    }
     panel.hidden = !open;
     launcher.setAttribute("aria-expanded", String(open));
     if (open) iframe.focus();
@@ -108,17 +117,19 @@
   }
 
   function sendSession() {
-    if (!iframeReady || !iframe.contentWindow) return;
+    if (!iframe || !iframeReady || !iframe.contentWindow) return;
     if (sessionPayload) iframe.contentWindow.postMessage(sessionPayload, appOrigin);
     else if (sessionError) iframe.contentWindow.postMessage({ type: "docchat:session_error", bot_id: botId, parent_origin: parentOrigin, message: sessionError }, appOrigin);
   }
 
   function requestSession() {
+    ensureIframe();
     if (requestInFlight) return;
     requestInFlight = true;
     var controller = new AbortController();
     requestController = controller;
     var timeout = window.setTimeout(function () { controller.abort(); }, 15000);
+    sessionPayload = null;
     sessionError = null;
     status.hidden = true;
     fetch(apiOrigin + "/functions/v1/public-session", {
@@ -159,7 +170,7 @@
   }
 
   window.addEventListener("message", function (event) {
-    if (event.source !== iframe.contentWindow || event.origin !== appOrigin || typeof event.data !== "object" || event.data === null) return;
+    if (!iframe || event.source !== iframe.contentWindow || event.origin !== appOrigin || typeof event.data !== "object" || event.data === null) return;
     var data = event.data;
     if (data.bot_id !== botId || data.parent_origin !== parentOrigin) return;
     if (data.type === "docchat:ready") {
@@ -177,7 +188,6 @@
   window.addEventListener("keydown", function (event) {
     if (event.key === "Escape" && open) setOpen(false);
   });
-  requestSession();
   }
 
   if (document.body) mount();

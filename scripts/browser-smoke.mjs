@@ -139,11 +139,11 @@ async function removeStorage(apiUrl, serviceRoleKey, paths) {
   await response.arrayBuffer();
 }
 
-async function signIn(apiUrl, anonKey, email) {
+async function signIn(apiUrl, anonKey, email, userPassword = password) {
   const result = await restJson(apiUrl, "/auth/v1/token?grant_type=password", {
     method: "POST",
     headers: authHeaders(anonKey),
-    body: JSON.stringify({ email, password }),
+    body: JSON.stringify({ email, password: userPassword }),
   });
   if (!result.response.ok || typeof result.body.access_token !== "string") throw new Error("Browser smoke sign-in failed.");
   return result.body.access_token;
@@ -226,6 +226,18 @@ async function waitForConfirmationLink(email) {
   return waitFor("confirmation email", () => confirmationLink(email), 60000);
 }
 
+async function recoveryLink(apiUrl, serviceRoleKey, email, redirectTo) {
+  const result = await restJson(apiUrl, "/auth/v1/admin/generate_link", {
+    method: "POST",
+    headers: authHeaders(serviceRoleKey),
+    body: JSON.stringify({ type: "recovery", email, redirect_to: redirectTo }),
+  });
+  if (!result.response.ok || typeof result.body?.action_link !== "string") {
+    throw new Error("Recovery link could not be generated.");
+  }
+  return result.body.action_link;
+}
+
 async function waitForVisible(locator, description, timeoutMilliseconds = 30000) {
   try {
     await locator.waitFor({ state: "visible", timeout: timeoutMilliseconds });
@@ -272,6 +284,8 @@ async function main() {
   let context;
   let ownerPage;
   let externalPage;
+  let recoveryContext;
+  let unauthRecoveryContext;
 
   try {
     browser = await chromium.launch({ headless: true, executablePath: browserExecutablePath() });
@@ -336,7 +350,7 @@ async function main() {
     await ownerPage.locator("#chat-message").fill("What does standard shipping cost and how long does it take?");
     await ownerPage.getByRole("button", { name: "Send" }).click();
     await waitForVisible(ownerLog.locator("p").filter({ hasText: "$8" }).first(), "owner answer did not include the shipping cost", maxProcessingMilliseconds);
-    await waitForVisible(ownerLog.getByText(/Sources \(\d+\)/, { exact: false }), "owner answer did not show sources", maxProcessingMilliseconds);
+    await waitForVisible(ownerLog.getByText(/Retrieved excerpts \(\d+\)/, { exact: false }), "owner answer did not show retrieved excerpts", maxProcessingMilliseconds);
     const ownerConversation = ownerPage.getByRole("button", { name: /Conversation from/ }).first();
     await waitForVisible(ownerConversation, "owner conversation was not added to history", maxProcessingMilliseconds);
     const usageAfterOwner = await waitFor("owner usage reservation", async () => (await readUsage(apiUrl, serviceRoleKey, ownerId)) === 1 ? 1 : 0, 30000);
@@ -375,35 +389,46 @@ async function main() {
     let visitorAuthorization;
     let visitorChatBody;
     let visitorChatUrl = "";
+    let visitorSessionRequestCount = 0;
     externalPage.on("request", (request) => {
+      if (request.url().includes("/functions/v1/public-session")) visitorSessionRequestCount += 1;
       if (!request.url().includes("/functions/v1/chat")) return;
       visitorAuthorization = request.headers().authorization;
       visitorChatUrl = request.url();
       try { visitorChatBody = request.postDataJSON(); } catch { /* request body may be unavailable */ }
     });
+    await externalPage.goto(demoUrl + "/?bot_id=" + encodeURIComponent(botId), { waitUntil: "domcontentloaded" });
+    await externalPage.waitForTimeout(100);
+    const launcher = externalPage.locator('button[aria-label="Open DocChat"]');
+    await waitForVisible(launcher, "external demo did not load");
+    assert(visitorSessionRequestCount === 0, "visitor session was requested before opening the widget");
+    assert(await externalPage.locator('iframe[title="DocChat support chat"]').count() === 0, "widget iframe loaded before opening the widget");
     const sessionResponsePromise = externalPage.waitForResponse(
       (response) => response.url().includes("/functions/v1/public-session"),
       { timeout: networkTimeoutMilliseconds },
     );
-    await externalPage.goto(demoUrl + "/?bot_id=" + encodeURIComponent(botId), { waitUntil: "domcontentloaded" });
+    await launcher.click();
     const sessionResponse = await sessionResponsePromise;
     const sessionBody = await responseBody(sessionResponse);
     const visitorSessionToken = typeof sessionBody.session_token === "string" ? sessionBody.session_token : "";
     assert(sessionResponse.status() === 201 && visitorSessionToken.length >= 40, "visitor session was not created");
     assert(!externalPage.url().includes(visitorSessionToken), "visitor session token leaked into the demo URL");
-    await waitForVisible(externalPage.locator('button[aria-label="Open DocChat"]'), "external demo did not load");
-    await externalPage.locator('button[aria-label="Open DocChat"]').click();
     const widgetFrame = externalPage.locator('iframe[title="DocChat support chat"]');
     const widgetFrameSource = await widgetFrame.getAttribute("src");
     assert(!String(widgetFrameSource ?? "").includes(visitorSessionToken), "visitor session token leaked into the iframe URL");
     const widget = externalPage.frameLocator('iframe[title="DocChat support chat"]');
     const widgetInput = widget.locator("#widget-message");
     await widgetInput.waitFor({ state: "visible", timeout: 30000 });
+    await launcher.click();
+    await launcher.click();
+    await externalPage.waitForTimeout(100);
+    assert(visitorSessionRequestCount === 1, "widget reopen requested another visitor session");
+    assert(await widgetFrame.count() === 1, "widget reopen created another iframe");
     await widgetInput.fill("What does standard shipping cost and how long does it take?");
     await widget.getByRole("button", { name: "Send" }).click();
     const widgetLog = widget.getByRole("log", { name: "Visitor chat transcript" });
     await waitForVisible(widgetLog.locator("p").filter({ hasText: "$8" }).first(), "visitor answer did not include the shipping cost", maxProcessingMilliseconds);
-    await waitForVisible(widgetLog.getByText(/Sources \(\d+\)/, { exact: false }), "visitor answer did not show sources", maxProcessingMilliseconds);
+    await waitForVisible(widgetLog.getByText(/Retrieved excerpts \(\d+\)/, { exact: false }), "visitor answer did not show retrieved excerpts", maxProcessingMilliseconds);
     await waitFor("visitor session token in chat body", () => visitorChatBody?.session_token === visitorSessionToken ? true : 0, networkTimeoutMilliseconds);
     assert(!visitorChatUrl.includes(visitorSessionToken), "visitor session token leaked into the chat URL");
     assert(visitorChatBody?.session_token === visitorSessionToken, "visitor chat did not use its scoped session token");
@@ -438,10 +463,13 @@ async function main() {
     await setPublicToggle(ownerPage, false);
     await ownerPage.getByRole("button", { name: "Save settings" }).click();
     await waitForVisible(ownerPage.getByText("Public chat is off", { exact: false }), "unpublish did not complete");
-    const blockedResponse = externalPage.waitForResponse((response) => response.url().includes("/functions/v1/public-session"));
     await externalPage.reload({ waitUntil: "domcontentloaded" });
-    assert((await blockedResponse).status() === 404, "unpublished bot issued a new visitor session");
+    await externalPage.waitForTimeout(100);
+    await waitForVisible(externalPage.locator('button[aria-label="Open DocChat"]'), "unpublished demo did not load");
+    assert(await externalPage.locator('iframe[title="DocChat support chat"]').count() === 0, "unpublished widget iframe loaded before opening the widget");
+    const blockedResponse = externalPage.waitForResponse((response) => response.url().includes("/functions/v1/public-session"));
     await externalPage.locator('button[aria-label="Open DocChat"]').click();
+    assert((await blockedResponse).status() === 404, "unpublished bot issued a new visitor session");
     await waitForVisible(externalPage.locator('[data-docchat-widget]').locator(".status-title"), "unpublished widget did not show an error");
 
     await ownerPage.bringToFront();
@@ -451,10 +479,70 @@ async function main() {
     assert(await userExists(apiUrl, serviceRoleKey, ownerId), "deleting the bot removed the owner account");
     assert((await adminSelect(apiUrl, serviceRoleKey, "bots", { select: "id", account_id: "eq." + ownerId })).length === 0, "deleted bot remains in the database");
     assert((await adminSelect(apiUrl, serviceRoleKey, "documents", { select: "id", bot_id: "eq." + botId })).length === 0, "deleted bot documents remain");
+    botId = "";
+
+    await ownerPage.goto(appUrl + "/auth/recovery?type=recovery", { waitUntil: "domcontentloaded" });
+    await waitForVisible(ownerPage.getByRole("alert").filter({ hasText: "reset link" }), "ordinary session accepted a bare recovery link", 30000);
+    assert(await ownerPage.locator("#new-password").count() === 0, "ordinary session exposed the recovery form for a bare link");
+
+    const callbackRecoveryLink = await recoveryLink(apiUrl, serviceRoleKey, ownerEmail, appUrl + "/auth/callback");
+    recoveryContext = await browser.newContext({ viewport: { width: 1280, height: 900 }, locale: "en-US", timezoneId: "UTC" });
+    recoveryContext.setDefaultTimeout(30000);
+    const recoveryPage = await recoveryContext.newPage();
+    await recoveryPage.route("**/auth/v1/user", async (route) => {
+      await wait(6000);
+      await route.continue();
+    });
+    await recoveryPage.goto(callbackRecoveryLink, { waitUntil: "domcontentloaded" });
+    await waitForVisible(recoveryPage.locator("#new-password"), "valid recovery callback did not expose the password form", 30000);
+
+    const recoveryControlPage = await recoveryContext.newPage();
+    await recoveryControlPage.goto(appUrl + "/dashboard", { waitUntil: "domcontentloaded" });
+    await waitForVisible(recoveryControlPage.getByRole("button", { name: "Sign out" }), "recovery control session did not load", 30000);
+    await recoveryControlPage.getByRole("button", { name: "Sign out" }).click();
+    await waitForVisible(recoveryPage.getByRole("alert").filter({ hasText: "reset link" }), "signed-out recovery session kept the form available", 30000);
+    assert(await recoveryPage.locator("#new-password").count() === 0, "signed-out recovery session still exposed the form");
+
+    const directRecoveryLink = await recoveryLink(apiUrl, serviceRoleKey, ownerEmail, appUrl + "/auth/recovery");
+    await recoveryPage.goto(directRecoveryLink, { waitUntil: "domcontentloaded" });
+    await waitForVisible(recoveryPage.locator("#new-password"), "valid recovery link did not expose the password form", 30000);
+    const recoveryPassword = "Recovered-only-DocChat-2026!";
+    await recoveryPage.locator("#new-password").fill(recoveryPassword);
+    await recoveryPage.locator("#confirm-password").fill(recoveryPassword);
+    await recoveryPage.getByRole("button", { name: "Update password" }).click();
+    await waitForVisible(recoveryPage.getByRole("status").filter({ hasText: "password has been updated" }), "password recovery did not complete", 30000);
+    assert(Boolean(await signIn(apiUrl, anonKey, ownerEmail, recoveryPassword)), "recovered password could not sign in");
+
+    await ownerPage.evaluate(() => localStorage.clear());
+    await ownerPage.goto(appUrl + "/auth", { waitUntil: "domcontentloaded" });
+    await ownerPage.locator("#auth-email").fill(ownerEmail);
+    await ownerPage.locator("#auth-password").fill(recoveryPassword);
+    await ownerPage.getByRole("button", { name: "Sign in" }).click();
+    await ownerPage.waitForURL(/\/dashboard(?:\?|$)/, { timeout: 30000 });
+    await ownerPage.goto(directRecoveryLink, { waitUntil: "domcontentloaded" });
+    await waitForVisible(ownerPage.getByRole("alert").filter({ hasText: "reset link" }), "reused recovery link did not show an error", 30000);
+    assert(await ownerPage.locator("#new-password").count() === 0, "reused recovery link exposed the form to an ordinary session");
+
+    unauthRecoveryContext = await browser.newContext({ viewport: { width: 1280, height: 900 }, locale: "en-US", timezoneId: "UTC" });
+    unauthRecoveryContext.setDefaultTimeout(30000);
+    const unauthRecoveryPage = await unauthRecoveryContext.newPage();
+    await unauthRecoveryPage.goto(appUrl + "/auth/recovery?type=recovery", { waitUntil: "domcontentloaded" });
+    await waitForVisible(unauthRecoveryPage.getByRole("alert").filter({ hasText: "reset link" }), "invalid recovery link without a session did not show an error", 30000);
+    assert(await unauthRecoveryPage.locator("#new-password").count() === 0, "invalid recovery link without a session exposed the form");
 
     console.log("browser smoke passed");
   } finally {
     let cleanupFailed = false;
+    try {
+      if (recoveryContext) await recoveryContext.close();
+    } catch {
+      cleanupFailed = true;
+    }
+    try {
+      if (unauthRecoveryContext) await unauthRecoveryContext.close();
+    } catch {
+      cleanupFailed = true;
+    }
     try {
       if (externalPage) await externalPage.close();
     } catch {
@@ -508,7 +596,22 @@ async function main() {
   }
 }
 
-main().catch(() => {
-  console.error("browser smoke failed");
+function safeFailureMessage(error) {
+  const message = error instanceof Error ? error.message : String(error);
+  const firstLine = message.split(/\r?\n/, 1)[0];
+  return firstLine
+    .replace(/https?:\/\/\S+/g, (value) => {
+      try {
+        const url = new URL(value);
+        return url.origin + url.pathname;
+      } catch {
+        return "[url]";
+      }
+    })
+    .replace(/[A-Za-z0-9_-]{32,}/g, "[redacted]");
+}
+
+main().catch((error) => {
+  console.error("browser smoke failed: " + safeFailureMessage(error));
   process.exitCode = 1;
 });

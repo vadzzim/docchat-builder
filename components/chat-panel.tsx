@@ -306,6 +306,7 @@ export function ChatPanel({
         }
       }
     } catch (error) {
+      controller.abort();
       const failure = messageError(error);
       setMessages((current) => current.map((item) => item.id === assistantId ? {
         ...item,
@@ -394,7 +395,7 @@ export function ChatPanel({
                   {item.incomplete && <p className="mt-1 px-1 text-xs text-rose-600" role="status">Incomplete response. Nothing was saved as a completed answer.</p>}
                   {item.role === "assistant" && !item.pending && !item.incomplete && item.citations.length > 0 && (
                     <details className="mt-2 rounded-xl bg-white px-3 py-2 text-xs text-slate-600 ring-1 ring-slate-200">
-                      <summary className="cursor-pointer font-semibold text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-lilac">Sources ({item.citations.length})</summary>
+                      <summary className="cursor-pointer font-semibold text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-lilac">Retrieved excerpts ({item.citations.length})</summary>
                       <div className="mt-2 space-y-3">
                         {item.citations.map((citation, index) => (
                           <div key={`${citation.document_id}-${citation.chunk_index}-${index}`}>

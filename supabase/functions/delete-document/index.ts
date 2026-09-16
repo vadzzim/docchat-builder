@@ -1,6 +1,6 @@
 import { errorResponse, HttpError, json, preflight, requirePost } from "../_shared/http.ts";
 import { acquireRateLimit } from "../_shared/limits.ts";
-import { createAdminClient, requireUser } from "../_shared/supabase.ts";
+import { requireUser } from "../_shared/supabase.ts";
 import { documentIdSchema, parseJson } from "../_shared/validation.ts";
 
 const maxDeleteMilliseconds = 60000;

@@ -94,7 +94,7 @@ export async function readBoundedBody(
   maxBytes: number,
   signal?: AbortSignal,
   timeoutMilliseconds = 30000,
-): Promise<Uint8Array> {
+): Promise<Uint8Array<ArrayBuffer>> {
   const contentLength = Number(request.headers.get("content-length") ?? 0);
   if (Number.isFinite(contentLength) && contentLength > maxBytes) {
     throw new HttpError(413, "Upload request is too large.", "payload_too_large");

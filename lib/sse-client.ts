@@ -25,6 +25,7 @@ export async function readSse(
   let buffer = "";
   let eventName = "message";
   let dataLines: string[] = [];
+  let completed = false;
 
   const dispatch = () => {
     if (dataLines.length === 0) return;
@@ -62,7 +63,15 @@ export async function readSse(
     buffer += decoder.decode();
     if (buffer) readLine(buffer);
     dispatch();
+    completed = true;
   } finally {
+    if (!completed) {
+      try {
+        await reader.cancel();
+      } catch {
+        // Keep the original parser or callback error.
+      }
+    }
     reader.releaseLock();
   }
 }

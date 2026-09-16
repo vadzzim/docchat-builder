@@ -39,9 +39,9 @@ npm run setup:local
 Load the local models once:
 
 ```powershell
-& "$env:LOCALAPPDATA\Programs\Ollama\ollama.exe" pull bge-m3
-& "$env:LOCALAPPDATA\Programs\Ollama\ollama.exe" pull qwen3:0.6b
-& "$env:LOCALAPPDATA\Programs\Ollama\ollama.exe" pull qwen2.5:1.5b
+ollama pull bge-m3
+ollama pull qwen3:0.6b
+ollama pull qwen2.5:1.5b
 ```
 
 Edge Functions reach the host model server at `http://host.docker.internal:11434`. The product uses `qwen3:0.6b`; `qwen2.5:1.5b` is only the comparison model. The model comparison runner talks directly to `http://127.0.0.1:11434` from Windows.
@@ -85,11 +85,18 @@ Publishing stays off until Settings has at least one allowed `http(s)` origin an
 
 ## Checks
 
-These commands use local services and synthetic data. They clean their own fixtures; they do not print passwords, tokens, or runtime keys.
+The check command uses the pinned Deno runtime through `npx`, checks the Next app and every Edge Function, runs the app and Edge Function linters, and executes the mocked critical regressions. The first run downloads Deno and the remote Edge Function type imports. These checks do not require local Supabase, Ollama, Mailpit, the app, or the external demo.
 
 ```powershell
-npm run typecheck
+npm run check
 git diff --check
+```
+
+Run `npm run typecheck:app` or `npm run typecheck:edge` for one typecheck scope, and `npm run lint:app` or `npm run lint:edge` for one lint scope. These commands cover `app`, `components`, `lib`, `public`, and `supabase/functions`; scripts and test files are checked by their own commands. App lint keeps the existing Next path aliases, browser globals, and IIFE widget syntax; Edge lint only relaxes Deno's import-prefix rule for the existing URL imports.
+
+These service-backed checks use local services and synthetic data. They clean their own fixtures; they do not print passwords, tokens, or runtime keys.
+
+```powershell
 npm run test:ingestion
 npm run test:chat
 npm run test:billing
@@ -98,7 +105,7 @@ npm run test:browser
 npm run test:model
 ```
 
-The browser smoke test needs the app, Edge Functions, Supabase, Mailpit, Ollama, and the external demo running. It uses a fresh confirmation email and real document processing. The model comparison can take several minutes on the local GPU and writes an ignored raw report under `test-results/`.
+The browser smoke test needs the app, Edge Functions, Supabase, Mailpit, Ollama, and the external demo running. It uses a fresh confirmation email, real document processing, and local recovery-link checks. The model comparison can take several minutes on the local GPU and writes an ignored raw report under `test-results/`.
 
 Processing is synchronous with a 110-second request deadline and a 180-second processing lease. The measured 100 KiB files took about 81–85 seconds on this machine; slower hardware may time out. After an interrupted worker's lease expires, retry the document in Knowledge. Partial chunks remain unavailable to chat, and a retry replaces the failed generation. This MVP has no durable background queue.
 

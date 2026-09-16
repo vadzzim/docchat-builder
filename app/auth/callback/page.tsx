@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
-import { createSupabaseBrowserClient } from "@/lib/supabase-browser";
+import { createSupabaseBrowserClient, hasRecoveryAttempt } from "@/lib/supabase-browser";
 
 type CallbackState = {
   kind: "error" | "success";
@@ -46,7 +46,7 @@ export default function AuthCallbackPage() {
 
     // Recovery links must always land on the password form, even when the
     // singleton has already restored a session from the URL hash.
-    if (type === "recovery") {
+    if (type === "recovery" || (type === null && hasRecoveryAttempt())) {
       router.replace("/auth/recovery");
       return () => {
         mounted = false;

@@ -89,7 +89,7 @@ export async function* chatStream(messages: ChatMessage[], parentSignal?: AbortS
       buffer = lines.pop() ?? "";
       for (const line of lines) {
         if (!line.trim()) continue;
-        let body: { error?: string; done?: boolean; message?: { content?: string }; response?: string };
+        let body: { error?: string; done?: boolean; done_reason?: string; message?: { content?: string }; response?: string };
         try {
           body = JSON.parse(line);
         } catch {
@@ -99,6 +99,9 @@ export async function* chatStream(messages: ChatMessage[], parentSignal?: AbortS
         const content = body.message?.content ?? body.response ?? "";
         if (content) yield content;
         if (body.done) {
+          if (body.done_reason === "length") {
+            throw new HttpError(502, "The AI answer was truncated by the response length limit. Please try again.", "answer_truncated");
+          }
           sawDone = true;
           break;
         }
@@ -106,7 +109,7 @@ export async function* chatStream(messages: ChatMessage[], parentSignal?: AbortS
       if (sawDone) break;
     }
     if (!sawDone && buffer.trim()) {
-      let body: { error?: string; done?: boolean; message?: { content?: string }; response?: string };
+      let body: { error?: string; done?: boolean; done_reason?: string; message?: { content?: string }; response?: string };
       try {
         body = JSON.parse(buffer);
       } catch {
@@ -115,6 +118,9 @@ export async function* chatStream(messages: ChatMessage[], parentSignal?: AbortS
       if (body.error) throw new Error("Ollama provider returned an error.");
       const content = body.message?.content ?? body.response ?? "";
       if (content) yield content;
+      if (body.done && body.done_reason === "length") {
+        throw new HttpError(502, "The AI answer was truncated by the response length limit. Please try again.", "answer_truncated");
+      }
       sawDone = Boolean(body.done);
     }
     if (!sawDone) throw new Error("Ollama stream ended before completion.");
