@@ -5,12 +5,28 @@ export type SseEvent = {
 
 export class SseStreamError extends Error {
   code?: string;
+  requestId?: string;
 
-  constructor(message: string, code?: string) {
+  constructor(message: string, code?: string, requestId?: string) {
     super(message);
     this.name = "SseStreamError";
     this.code = code;
+    this.requestId = requestId;
   }
+}
+
+function attachRequestId(error: unknown, requestId: string | undefined): unknown {
+  if (!requestId || (typeof error !== "object" && typeof error !== "function") || error === null) return error;
+  try {
+    if (error instanceof SseStreamError) {
+      error.requestId ??= requestId;
+    } else {
+      Object.defineProperty(error, "requestId", { value: requestId, configurable: true });
+    }
+  } catch {
+    // Preserve the original parser or callback error if it cannot be annotated.
+  }
+  return error;
 }
 
 /** Read a small server-sent event stream without treating EOF as success. */
@@ -18,14 +34,16 @@ export async function readSse(
   response: Response,
   onEvent: (event: SseEvent) => void,
   signal: AbortSignal,
+  requestId = response.headers.get("x-request-id") ?? undefined,
 ): Promise<void> {
-  if (!response.body) throw new SseStreamError("The chat stream did not include a response body.");
+  if (!response.body) throw new SseStreamError("The chat stream did not include a response body.", undefined, requestId);
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
   let eventName = "message";
   let dataLines: string[] = [];
   let completed = false;
+  let sawDone = false;
 
   const dispatch = () => {
     if (dataLines.length === 0) return;
@@ -35,7 +53,9 @@ export async function readSse(
     } catch {
       throw new SseStreamError("The chat returned malformed streaming data.");
     }
-    onEvent({ event: eventName, data });
+    const event = { event: eventName, data };
+    if (event.event === "done") sawDone = true;
+    onEvent(event);
     eventName = "message";
     dataLines = [];
   };
@@ -63,7 +83,10 @@ export async function readSse(
     buffer += decoder.decode();
     if (buffer) readLine(buffer);
     dispatch();
+    if (!sawDone) throw new SseStreamError("The chat stream ended before the answer was complete.", undefined, requestId);
     completed = true;
+  } catch (error) {
+    throw attachRequestId(error, requestId);
   } finally {
     if (!completed) {
       try {

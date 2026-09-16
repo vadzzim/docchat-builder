@@ -35,8 +35,8 @@ export async function acquireRateLimit(
       p_lease_id: result.lease_id,
     });
     if (error) {
-      console.error("Rate limit lease release failed:", error.message);
-      throw new Error("Rate limit lease release failed: " + error.message);
+      console.error("Rate limit lease release failed");
+      throw new Error("Rate limit lease release failed");
     }
     released = true;
   };

@@ -18,6 +18,7 @@ export function corsHeaders(request: Request, allowOrigin = true): Record<string
     "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type, x-cron-secret",
     "Access-Control-Allow-Methods": "POST, OPTIONS",
     "Access-Control-Max-Age": "86400",
+    "Access-Control-Expose-Headers": "X-Request-Id",
     "Vary": "Origin",
   };
   if (allowOrigin && origin) headers["Access-Control-Allow-Origin"] = origin;
@@ -63,13 +64,14 @@ export function json(
   });
 }
 
-export function sseHeaders(request: Request, allowOrigin = true): Record<string, string> {
+export function sseHeaders(request: Request, allowOrigin = true, requestId?: string): Record<string, string> {
   return {
     ...corsHeaders(request, allowOrigin),
     "Cache-Control": "no-cache, no-transform",
     Connection: "keep-alive",
     "Content-Type": "text/event-stream; charset=utf-8",
     "X-Accel-Buffering": "no",
+    ...(requestId ? { "X-Request-Id": requestId } : {}),
   };
 }
 
@@ -77,12 +79,25 @@ export function sseEvent(event: string, data: unknown): Uint8Array {
   return new TextEncoder().encode("event: " + event + "\ndata: " + JSON.stringify(data) + "\n\n");
 }
 
-export function errorResponse(request: Request, error: unknown, allowOrigin = true): Response {
+export function errorResponse(
+  request: Request,
+  error: unknown,
+  allowOrigin = true,
+  extraHeaders: Record<string, string> = {},
+): Response {
   if (error instanceof HttpError) {
-    return json(request, { error: error.message, code: error.code }, error.status, allowOrigin, error.headers);
+    return json(request, { error: error.message, code: error.code }, error.status, allowOrigin, {
+      ...error.headers,
+      ...extraHeaders,
+    });
   }
-  console.error(error);
-  return json(request, { error: "The request could not be completed.", code: "internal_error" }, 500, allowOrigin);
+  const errorName = error instanceof Error && /^[A-Za-z][A-Za-z0-9_]{0,48}$/.test(error.name) ? error.name : "UnknownError";
+  const errorCode = error && typeof error === "object" && "code" in error &&
+      typeof (error as { code?: unknown }).code === "string" && /^[a-z][a-z0-9_]{0,48}$/.test((error as { code: string }).code)
+    ? (error as { code: string }).code
+    : "internal_error";
+  console.error(JSON.stringify({ event: "request_error", error_name: errorName, error_code: errorCode }));
+  return json(request, { error: "The request could not be completed.", code: "internal_error" }, 500, allowOrigin, extraHeaders);
 }
 
 export function requirePost(request: Request): void {

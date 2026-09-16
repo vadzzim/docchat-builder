@@ -1,4 +1,5 @@
 import { HttpError } from "./http.ts";
+import { decodeOllamaStream } from "./ollama-stream.ts";
 
 const baseUrl = (Deno.env.get("OLLAMA_BASE_URL") ?? "http://host.docker.internal:11434").replace(/\/+$/, "");
 const chatModel = Deno.env.get("OLLAMA_CHAT_MODEL") ?? "qwen3:0.6b";
@@ -57,11 +58,8 @@ export async function* chatStream(messages: ChatMessage[], parentSignal?: AbortS
   if (parentSignal?.aborted) controller.abort();
   else parentSignal?.addEventListener("abort", abortFromParent, { once: true });
   const timer = setTimeout(() => controller.abort(), 90000);
-  let sawDone = false;
-  let response: Response;
-  let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
   try {
-    response = await fetch(baseUrl + "/api/chat", {
+    const response = await fetch(baseUrl + "/api/chat", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -78,57 +76,11 @@ export async function* chatStream(messages: ChatMessage[], parentSignal?: AbortS
       throw new Error("Ollama chat request failed (" + response.status + ").");
     }
 
-    reader = response.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = "";
-    while (true) {
-      const { value, done } = await reader.read();
-      if (done) break;
-      buffer += decoder.decode(value, { stream: true });
-      const lines = buffer.split("\n");
-      buffer = lines.pop() ?? "";
-      for (const line of lines) {
-        if (!line.trim()) continue;
-        let body: { error?: string; done?: boolean; done_reason?: string; message?: { content?: string }; response?: string };
-        try {
-          body = JSON.parse(line);
-        } catch {
-          throw new Error("Ollama returned malformed streaming data.");
-        }
-        if (body.error) throw new Error("Ollama provider returned an error.");
-        const content = body.message?.content ?? body.response ?? "";
-        if (content) yield content;
-        if (body.done) {
-          if (body.done_reason === "length") {
-            throw new HttpError(502, "The AI answer was truncated by the response length limit. Please try again.", "answer_truncated");
-          }
-          sawDone = true;
-          break;
-        }
-      }
-      if (sawDone) break;
-    }
-    if (!sawDone && buffer.trim()) {
-      let body: { error?: string; done?: boolean; done_reason?: string; message?: { content?: string }; response?: string };
-      try {
-        body = JSON.parse(buffer);
-      } catch {
-        throw new Error("Ollama returned an incomplete streaming response.");
-      }
-      if (body.error) throw new Error("Ollama provider returned an error.");
-      const content = body.message?.content ?? body.response ?? "";
-      if (content) yield content;
-      if (body.done && body.done_reason === "length") {
-        throw new HttpError(502, "The AI answer was truncated by the response length limit. Please try again.", "answer_truncated");
-      }
-      sawDone = Boolean(body.done);
-    }
-    if (!sawDone) throw new Error("Ollama stream ended before completion.");
+    yield* decodeOllamaStream(response.body);
   } finally {
     clearTimeout(timer);
     controller.abort();
     parentSignal?.removeEventListener("abort", abortFromParent);
-    reader?.releaseLock();
   }
 }
 

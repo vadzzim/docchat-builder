@@ -1,0 +1,217 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: docchat-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  NODE_VERSION: 24.14.0
+  PNPM_VERSION: 10.30.3
+  DENO_VERSION: 2.9.6
+  SUPABASE_CLI_VERSION: 2.117.0
+
+jobs:
+  checks:
+    name: Typecheck, lint, regression, build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      NEXT_PUBLIC_SUPABASE_URL: http://127.0.0.1:55321
+      NEXT_PUBLIC_SUPABASE_ANON_KEY: ci-build-anon-key
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Capture commit and runtime manifest
+        run: pnpm manifest
+
+      - name: Typecheck
+        run: node scripts/ci-command.mjs typecheck pnpm run typecheck
+
+      - name: Lint
+        run: node scripts/ci-command.mjs lint pnpm run lint
+
+      - name: Run named regression tests
+        run: node scripts/ci-command.mjs regression pnpm run test:regression
+
+      - name: Check controlled provider contract
+        run: node scripts/ci-command.mjs provider pnpm run test:provider
+
+      - name: Check evaluation aggregator
+        run: node scripts/ci-command.mjs eval-aggregate pnpm run test:eval-aggregate
+
+      - name: Build
+        run: node scripts/ci-command.mjs build pnpm run build
+
+      - name: Check patch whitespace
+        run: node scripts/ci-command.mjs whitespace git diff --check
+
+      - name: Upload fast-check reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-checks-${{ github.run_id }}
+          path: |
+            test-results/runtime-manifest.json
+            test-results/ci-command-results.json
+          if-no-files-found: ignore
+
+  local-integration:
+    name: Local Supabase with controlled provider
+    needs: checks
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Cache Playwright browsers
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+
+      - name: Install Chromium
+        run: pnpm exec playwright install --with-deps chromium
+
+      - name: Capture commit and runtime manifest
+        run: pnpm manifest
+
+      - name: Start services and run service-backed checks
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          mkdir -p test-results
+          provider_pid=0
+          functions_pid=0
+          app_pid=0
+          demo_pid=0
+
+          cleanup() {
+            set +e
+            for pid in "$demo_pid" "$app_pid" "$functions_pid" "$provider_pid"; do
+              if [[ "$pid" != 0 ]]; then kill "$pid" 2>/dev/null || true; fi
+            done
+            for pid in "$demo_pid" "$app_pid" "$functions_pid" "$provider_pid"; do
+              if [[ "$pid" != 0 ]]; then wait "$pid" 2>/dev/null || true; fi
+            done
+            npx --yes supabase@${SUPABASE_CLI_VERSION} stop >test-results/supabase-stop.log 2>&1 || true
+            rm -f .env.functions.local .env.local
+          }
+          trap cleanup EXIT
+
+          npx --yes supabase@${SUPABASE_CLI_VERSION} start -x analytics,vector,logflare,imgproxy,realtime,supavisor,edge-runtime >test-results/supabase-start.log 2>&1
+          npx --yes supabase@${SUPABASE_CLI_VERSION} migration up --local >test-results/supabase-migration.log 2>&1
+          pnpm setup:local >test-results/local-setup.log 2>&1
+
+          status_json="$(npx --yes supabase@${SUPABASE_CLI_VERSION} status -o json)"
+          runtime_value() {
+            STATUS_JSON="$status_json" node -e '
+              const raw = process.env.STATUS_JSON ?? "";
+              const start = raw.indexOf("{");
+              const end = raw.lastIndexOf("}");
+              if (start < 0 || end < start) process.exit(1);
+              const status = JSON.parse(raw.slice(start, end + 1));
+              const wanted = String(process.argv[1]).replace(/[^a-z]/gi, "").toLowerCase();
+              const entry = Object.entries(status).find(([key, value]) => typeof value === "string" && key.replace(/[^a-z]/gi, "").toLowerCase() === wanted);
+              if (!entry) process.exit(1);
+              process.stdout.write(entry[1]);
+            ' "$1"
+          }
+          api_url="$(runtime_value API_URL)"
+          anon_key="$(runtime_value ANON_KEY)"
+
+          network_name="$(docker network ls --format '{{.Name}}' | grep -E 'supabase_network_docchat-local|docchat-local' | head -n 1 || true)"
+          provider_host=""
+          if [[ -n "$network_name" ]]; then
+            provider_host="$(docker network inspect -f '{{(index .IPAM.Config 0).Gateway}}' "$network_name" 2>/dev/null || true)"
+          fi
+          provider_host="${provider_host:-host.docker.internal}"
+          provider_url="http://${provider_host}:11434"
+
+          CONTROLLED_PROVIDER_HOST=0.0.0.0 CONTROLLED_PROVIDER_PORT=11434 \
+            node scripts/controlled-provider.mjs >test-results/controlled-provider.log 2>&1 &
+          provider_pid=$!
+          for attempt in $(seq 1 30); do
+            if curl --silent --fail http://127.0.0.1:11434/health >/dev/null; then break; fi
+            if [[ "$attempt" == 30 ]]; then exit 1; fi
+            sleep 1
+          done
+
+          printf '\nOLLAMA_BASE_URL=%s\nOLLAMA_CHAT_MODEL=ci-controlled\nOLLAMA_EMBED_MODEL=ci-controlled\nWIDGET_ORIGIN=http://127.0.0.1:3000\n' \
+            "$provider_url" >>.env.functions.local
+          npx --yes supabase@${SUPABASE_CLI_VERSION} functions serve --env-file .env.functions.local >test-results/functions.log 2>&1 &
+          functions_pid=$!
+          for attempt in $(seq 1 60); do
+            if curl --silent --fail --output /dev/null -X OPTIONS "$api_url/functions/v1/chat" -H 'Origin: http://127.0.0.1:3000'; then break; fi
+            if [[ "$attempt" == 60 ]]; then exit 1; fi
+            sleep 2
+          done
+
+          NEXT_PUBLIC_SUPABASE_URL="$api_url" NEXT_PUBLIC_SUPABASE_ANON_KEY="$anon_key" \
+            pnpm dev --hostname 127.0.0.1 >test-results/next.log 2>&1 &
+          app_pid=$!
+          pnpm run demo >test-results/demo.log 2>&1 &
+          demo_pid=$!
+          for url in http://127.0.0.1:3000/auth http://127.0.0.1:3001/; do
+            for attempt in $(seq 1 60); do
+              if curl --silent --fail "$url" >/dev/null; then break; fi
+              if [[ "$attempt" == 60 ]]; then exit 1; fi
+              sleep 2
+            done
+          done
+
+          node scripts/ci-command.mjs rate-limit docker exec -i supabase_db_docchat-local psql -X -q -v ON_ERROR_STOP=1 -U postgres -d postgres --stdin-file=supabase/tests/rate_limit_regression.sql
+          node scripts/ci-command.mjs provider pnpm run test:provider
+          node scripts/ci-command.mjs ingestion pnpm run test:ingestion
+          node scripts/ci-command.mjs chat pnpm run test:chat
+          node scripts/ci-command.mjs billing pnpm run test:billing
+          node scripts/ci-command.mjs cleanup pnpm run test:cleanup
+          node scripts/ci-command.mjs browser pnpm run test:browser
+
+      - name: Upload local-integration reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-local-integration-${{ github.run_id }}
+          path: |
+            test-results/runtime-manifest.json
+            test-results/ci-command-results.json
+          if-no-files-found: ignore

@@ -47,32 +47,37 @@ type DisplayMessage = StoredMessage & {
   incomplete?: boolean;
 };
 
-type StreamFailure = Error & { code?: string };
+type StreamFailure = Error & { code?: string; requestId?: string };
 
 class ChatRequestError extends SseStreamError {
-  constructor(message: string, code?: string) {
-    super(message, code);
+  constructor(message: string, code?: string, requestId?: string) {
+    super(message, code, requestId);
     this.name = "ChatRequestError";
   }
 }
 
-function responseError(data: unknown, fallback: string): ChatRequestError {
+function responseError(data: unknown, fallback: string, fallbackRequestId?: string): ChatRequestError {
   if (typeof data === "object" && data !== null && "error" in data && typeof data.error === "string") {
-    return new ChatRequestError(data.error, "code" in data && typeof data.code === "string" ? data.code : undefined);
+    return new ChatRequestError(
+      data.error,
+      "code" in data && typeof data.code === "string" ? data.code : undefined,
+      "request_id" in data && typeof data.request_id === "string" ? data.request_id : fallbackRequestId,
+    );
   }
-  return new ChatRequestError(fallback);
+  return new ChatRequestError(fallback, undefined, fallbackRequestId);
 }
 
 async function parseErrorResponse(response: Response): Promise<ChatRequestError> {
+  const requestId = response.headers.get("x-request-id") ?? undefined;
   const text = await response.text();
   if (text) {
     try {
-      return responseError(JSON.parse(text), `Chat request failed (${response.status}).`);
+      return responseError(JSON.parse(text), `Chat request failed (${response.status}).`, requestId);
     } catch {
-      return new ChatRequestError(`Chat request failed (${response.status}).`);
+      return new ChatRequestError(`Chat request failed (${response.status}).`, undefined, requestId);
     }
   }
-  return new ChatRequestError(`Chat request failed (${response.status}).`);
+  return new ChatRequestError(`Chat request failed (${response.status}).`, undefined, requestId);
 }
 
 async function streamChat(
@@ -113,10 +118,11 @@ function messageCitations(value: unknown): Citation[] {
   });
 }
 
-function messageError(error: unknown): { message: string; code?: string } {
-  if (error instanceof ChatRequestError) return { message: error.message, code: error.code };
-  if (error instanceof DOMException && error.name === "AbortError") return { message: "The response was stopped before it completed.", code: "cancelled" };
-  if (error instanceof Error) return { message: error.message, code: (error as StreamFailure).code };
+function messageError(error: unknown): { message: string; code?: string; requestId?: string } {
+  if (error instanceof ChatRequestError) return { message: error.message, code: error.code, requestId: error.requestId };
+  const requestId = error instanceof Error && typeof (error as StreamFailure).requestId === "string" ? (error as StreamFailure).requestId : undefined;
+  if (error instanceof DOMException && error.name === "AbortError") return { message: "The response was stopped before it completed.", code: "cancelled", requestId };
+  if (error instanceof Error) return { message: error.message, code: (error as StreamFailure).code, requestId: (error as StreamFailure).requestId };
   return { message: "The chat could not be completed. Try again." };
 }
 
@@ -267,6 +273,7 @@ export function ChatPanel({
     streamController.current = controller;
     let sawDone = false;
     let conversationId = selectedConversationId;
+    let requestId: string | undefined;
     try {
       await streamChat(session, {
         bot_id: bot.id,
@@ -274,6 +281,7 @@ export function ChatPanel({
         message: sentMessage,
       }, (event) => {
         const data = event.data as Record<string, unknown> | null;
+        if (typeof data?.request_id === "string") requestId = data.request_id;
         if (event.event === "meta" && typeof data?.conversation_id === "string") {
           conversationId = data.conversation_id;
           setSelectedConversationId(conversationId);
@@ -284,7 +292,7 @@ export function ChatPanel({
           const citations = messageCitations(data?.citations);
           setMessages((current) => current.map((item) => item.id === assistantId ? { ...item, citations, pending: false, incomplete: false } : item));
         } else if (event.event === "error") {
-          throw responseError(data, "The chat could not be completed. Try again.");
+          throw responseError(data, "The chat could not be completed. Try again.", requestId);
         }
       }, controller.signal);
       if (!sawDone) throw new ChatRequestError("The chat stream ended before the answer was complete.");
@@ -312,9 +320,10 @@ export function ChatPanel({
         ...item,
         pending: false,
         incomplete: true,
-        content: item.content || "No completed answer was saved.",
+        content: item.content || "Response interrupted. Save status is unknown.",
       } : item));
-      setChatNotice(failure.message);
+      const failureRequestId = failure.requestId ?? requestId;
+      setChatNotice(failureRequestId ? `${failure.message} (Request ID: ${failureRequestId})` : failure.message);
     } finally {
       streamingRef.current = false;
       streamController.current = null;
@@ -392,7 +401,7 @@ export function ChatPanel({
                     <p className="whitespace-pre-wrap break-words">{item.content}</p>
                   </div>
                   {item.pending && <p className="mt-1 px-1 text-xs text-slate-500" role="status">Writing…</p>}
-                  {item.incomplete && <p className="mt-1 px-1 text-xs text-rose-600" role="status">Incomplete response. Nothing was saved as a completed answer.</p>}
+                  {item.incomplete && <p className="mt-1 px-1 text-xs text-rose-600" role="status">Incomplete response. Save status is unknown; check History.</p>}
                   {item.role === "assistant" && !item.pending && !item.incomplete && item.citations.length > 0 && (
                     <details className="mt-2 rounded-xl bg-white px-3 py-2 text-xs text-slate-600 ring-1 ring-slate-200">
                       <summary className="cursor-pointer font-semibold text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-lilac">Retrieved excerpts ({item.citations.length})</summary>

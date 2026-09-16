@@ -69,23 +69,28 @@ function citations(value: unknown): Citation[] {
   });
 }
 
-function streamError(value: unknown, fallback: string): SseStreamError {
+function streamError(value: unknown, fallback: string, fallbackRequestId?: string): SseStreamError {
   if (typeof value === "object" && value !== null && "error" in value && typeof value.error === "string") {
-    return new SseStreamError(value.error, "code" in value && typeof value.code === "string" ? value.code : undefined);
+    return new SseStreamError(
+      value.error,
+      "code" in value && typeof value.code === "string" ? value.code : undefined,
+      "request_id" in value && typeof value.request_id === "string" ? value.request_id : fallbackRequestId,
+    );
   }
-  return new SseStreamError(fallback);
+  return new SseStreamError(fallback, undefined, fallbackRequestId);
 }
 
 async function parseHttpError(response: Response): Promise<SseStreamError> {
+  const requestId = response.headers.get("x-request-id") ?? undefined;
   const text = await response.text();
   if (text) {
     try {
-      return streamError(JSON.parse(text), `Chat request failed (${response.status}).`);
+      return streamError(JSON.parse(text), `Chat request failed (${response.status}).`, requestId);
     } catch {
-      return new SseStreamError(`Chat request failed (${response.status}).`);
+      return new SseStreamError(`Chat request failed (${response.status}).`, undefined, requestId);
     }
   }
-  return new SseStreamError(`Chat request failed (${response.status}).`);
+  return new SseStreamError(`Chat request failed (${response.status}).`, undefined, requestId);
 }
 
 async function streamVisitor(
@@ -122,10 +127,14 @@ async function streamVisitor(
   await readSse(response, onEvent, signal);
 }
 
-function errorMessage(error: unknown): string {
-  if (error instanceof DOMException && error.name === "AbortError") return "The response was stopped before it completed.";
-  if (error instanceof Error) return error.message;
-  return "The chat could not be completed. Try again.";
+function errorMessage(error: unknown): { message: string; requestId?: string } {
+  const requestId = error instanceof Error && typeof (error as Error & { requestId?: unknown }).requestId === "string"
+    ? (error as Error & { requestId: string }).requestId
+    : undefined;
+  if (error instanceof DOMException && error.name === "AbortError") return { message: "The response was stopped before it completed.", requestId };
+  if (error instanceof SseStreamError) return { message: error.message, requestId: error.requestId };
+  if (error instanceof Error) return { message: error.message, requestId };
+  return { message: "The chat could not be completed. Try again." };
 }
 
 export function WidgetChat({ botId, parentOrigin }: { botId: string; parentOrigin: string }) {
@@ -241,9 +250,11 @@ export function WidgetChat({ botId, parentOrigin }: { botId: string; parentOrigi
     const controller = new AbortController();
     streamController.current = controller;
     let sawDone = false;
+    let requestId: string | undefined;
     try {
       await streamVisitor(apiOrigin, botId, sessionToken, parent, conversationId, trimmed, (event) => {
         const data = event.data as Record<string, unknown> | null;
+        if (typeof data?.request_id === "string") requestId = data.request_id;
         if (event.event === "meta" && typeof data?.conversation_id === "string") {
           setConversationId(data.conversation_id);
         } else if (event.event === "token" && typeof data?.token === "string") {
@@ -252,12 +263,14 @@ export function WidgetChat({ botId, parentOrigin }: { botId: string; parentOrigi
           sawDone = true;
           setMessages((current) => current.map((item) => item.id === assistantId ? { ...item, pending: false, citations: citations(data?.citations) } : item));
         } else if (event.event === "error") {
-          throw streamError(data, "The chat could not be completed. Try again.");
+          throw streamError(data, "The chat could not be completed. Try again.", requestId);
         }
       }, controller.signal);
       if (!sawDone) throw new SseStreamError("The chat stream ended before the answer was complete.");
     } catch (error) {
       controller.abort();
+      const failure = errorMessage(error);
+      const failureRequestId = failure.requestId ?? requestId;
       if (error instanceof SseStreamError && error.code === "invalid_session") {
         sessionTokenRef.current = null;
         setSessionToken(null);
@@ -265,10 +278,11 @@ export function WidgetChat({ botId, parentOrigin }: { botId: string; parentOrigi
         setConversationId(null);
         setMessages([]);
         setNotice(null);
-        setConnectionError("Your chat session expired. Try again to start a new chat.");
+        const message = "Your chat session expired. Try again to start a new chat.";
+        setConnectionError(failureRequestId ? `${message} (Request ID: ${failureRequestId})` : message);
       } else {
-        setMessages((current) => current.map((item) => item.id === assistantId ? { ...item, pending: false, incomplete: true, content: item.content || "No completed answer was saved." } : item));
-        setNotice(errorMessage(error));
+        setMessages((current) => current.map((item) => item.id === assistantId ? { ...item, pending: false, incomplete: true, content: item.content || "Response interrupted. Save status is unknown." } : item));
+        setNotice(failureRequestId ? `${failure.message} (Request ID: ${failureRequestId})` : failure.message);
       }
     } finally {
       setSending(false);
@@ -294,7 +308,7 @@ export function WidgetChat({ botId, parentOrigin }: { botId: string; parentOrigi
       ) : (
         <>
           <div ref={transcriptRef} className="min-h-0 flex-1 space-y-3 overflow-y-auto px-4 py-5" role="log" aria-live="polite" aria-label="Visitor chat transcript">
-            {messages.length === 0 ? <div className="max-w-[88%] rounded-2xl rounded-bl-md bg-slate-100 px-3.5 py-3 text-sm leading-6 text-slate-700">{bot.greeting}</div> : messages.map((item) => <div key={item.id} className={item.role === "user" ? "ml-auto max-w-[90%]" : "max-w-[94%]"}><div className={item.role === "user" ? "rounded-2xl rounded-br-md bg-lilac px-3.5 py-3 text-sm leading-6 text-white" : "rounded-2xl rounded-bl-md bg-slate-100 px-3.5 py-3 text-sm leading-6 text-slate-700"}><p className="whitespace-pre-wrap break-words">{item.content}</p></div>{item.pending && <p className="mt-1 px-1 text-[11px] text-slate-500" role="status">Writing…</p>}{item.incomplete && <p className="mt-1 px-1 text-[11px] text-rose-600" role="status">Incomplete response. Try again.</p>}{item.role === "assistant" && !item.pending && !item.incomplete && item.citations.length > 0 && <details className="mt-2 rounded-xl bg-white px-3 py-2 text-xs text-slate-600 ring-1 ring-slate-200"><summary className="cursor-pointer font-semibold text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-lilac">Retrieved excerpts ({item.citations.length})</summary><div className="mt-2 space-y-3">{item.citations.map((citation, index) => <div key={`${citation.document_id ?? citation.source}-${citation.chunk_index ?? index}`}><p className="font-semibold text-slate-700">{citation.source}</p><p className="mt-1 whitespace-pre-wrap leading-5 text-slate-500">{citation.excerpt}</p></div>)}</div></details>}</div>) }
+             {messages.length === 0 ? <div className="max-w-[88%] rounded-2xl rounded-bl-md bg-slate-100 px-3.5 py-3 text-sm leading-6 text-slate-700">{bot.greeting}</div> : messages.map((item) => <div key={item.id} className={item.role === "user" ? "ml-auto max-w-[90%]" : "max-w-[94%]"}><div className={item.role === "user" ? "rounded-2xl rounded-br-md bg-lilac px-3.5 py-3 text-sm leading-6 text-white" : "rounded-2xl rounded-bl-md bg-slate-100 px-3.5 py-3 text-sm leading-6 text-slate-700"}><p className="whitespace-pre-wrap break-words">{item.content}</p></div>{item.pending && <p className="mt-1 px-1 text-[11px] text-slate-500" role="status">Writing…</p>}{item.incomplete && <p className="mt-1 px-1 text-[11px] text-rose-600" role="status">Incomplete response. Save status is unknown.</p>}{item.role === "assistant" && !item.pending && !item.incomplete && item.citations.length > 0 && <details className="mt-2 rounded-xl bg-white px-3 py-2 text-xs text-slate-600 ring-1 ring-slate-200"><summary className="cursor-pointer font-semibold text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-lilac">Retrieved excerpts ({item.citations.length})</summary><div className="mt-2 space-y-3">{item.citations.map((citation, index) => <div key={`${citation.document_id ?? citation.source}-${citation.chunk_index ?? index}`}><p className="font-semibold text-slate-700">{citation.source}</p><p className="mt-1 whitespace-pre-wrap leading-5 text-slate-500">{citation.excerpt}</p></div>)}</div></details>}</div>) }
           </div>
           {notice && <p className="mx-4 mb-3 rounded-xl bg-rose-50 px-3 py-2 text-xs leading-5 text-rose-700" role="alert">{notice}</p>}
           <form className="shrink-0 border-t border-slate-100 px-4 py-3" onSubmit={submit}>

@@ -85,29 +85,35 @@ Publishing stays off until Settings has at least one allowed `http(s)` origin an
 
 ## Checks
 
-The check command uses the pinned Deno runtime through `npx`, checks the Next app and every Edge Function, runs the app and Edge Function linters, and executes the mocked critical regressions. The first run downloads Deno and the remote Edge Function type imports. These checks do not require local Supabase, Ollama, Mailpit, the app, or the external demo.
+The check command uses the pinned Deno runtime through `npx`, checks the Next app and every Edge Function against the tracked `deno.lock` in frozen mode, runs the app and Edge Function linters, and executes the named regression tests. The first run downloads Deno and the remote Edge Function type imports. These checks do not require local Supabase, Ollama, Mailpit, the app, or the external demo.
 
 ```powershell
 npm run check
 git diff --check
+npm run manifest
 ```
 
-Run `npm run typecheck:app` or `npm run typecheck:edge` for one typecheck scope, and `npm run lint:app` or `npm run lint:edge` for one lint scope. These commands cover `app`, `components`, `lib`, `public`, and `supabase/functions`; scripts and test files are checked by their own commands. App lint keeps the existing Next path aliases, browser globals, and IIFE widget syntax; Edge lint only relaxes Deno's import-prefix rule for the existing URL imports.
+Run `npm run typecheck:app` or `npm run typecheck:edge` for one typecheck scope, and `npm run lint:app` or `npm run lint:edge` for one lint scope. These commands cover `app`, `components`, `lib`, `public`, and `supabase/functions`; scripts and test files are checked by their own commands. App lint keeps the existing Next path aliases, browser globals, and IIFE widget syntax; Edge lint only relaxes Deno's import-prefix rule for the existing URL imports. `npm run manifest` writes an ignored JSON record with the commit, runtime versions, dependency pins, and lockfile hashes to `test-results/runtime-manifest.json`.
+
+GitHub Actions in `.github/workflows/ci.yml` runs the frozen install, typecheck, lint, named regressions, build, and whitespace check on every pull request and `main` push. A separate local-integration job starts the pinned Supabase CLI with Docker, a deterministic Ollama-compatible provider, the Next app, and the synthetic demo, then runs the ingestion, chat, billing, cleanup, and browser checks against the real local HTTP and database paths. It uses no cloud credentials or model downloads. Sanitized command status/timing records and the runtime manifest are uploaded as workflow artifacts even when a check fails; service logs are excluded from uploaded artifacts because startup output can contain local runtime keys.
 
 These service-backed checks use local services and synthetic data. They clean their own fixtures; they do not print passwords, tokens, or runtime keys.
 
 ```powershell
 npm run test:ingestion
+npm run test:ingestion -- --max-source
 npm run test:chat
 npm run test:billing
 npm run test:cleanup
 npm run test:browser
 npm run test:model
+npm run test:eval
+npm run test:eval-aggregate
 ```
 
-The browser smoke test needs the app, Edge Functions, Supabase, Mailpit, Ollama, and the external demo running. It uses a fresh confirmation email, real document processing, and local recovery-link checks. The model comparison can take several minutes on the local GPU and writes an ignored raw report under `test-results/`.
+The browser smoke test needs the app, Edge Functions, Supabase, Mailpit, Ollama, and the external demo running. It uses a fresh confirmation email, real document processing, and local recovery-link checks. The model comparison and the 32-output RAG challenge set can take several minutes on the local GPU and write ignored raw reports under `test-results/`. See [docs/RAG_EVALUATION.md](docs/RAG_EVALUATION.md) for the challenge set, fixed/retrieved lanes, and exact manual aggregation workflow.
 
-Processing is synchronous with a 110-second request deadline and a 180-second processing lease. The measured 100 KiB files took about 81–85 seconds on this machine; slower hardware may time out. After an interrupted worker's lease expires, retry the document in Knowledge. Partial chunks remain unavailable to chat, and a retry replaces the failed generation. This MVP has no durable background queue.
+Processing is synchronous with a 110-second request deadline and a 180-second processing lease. The measured 100 KiB files took about 81–85 seconds on this machine; slower hardware may time out. After an interrupted worker's lease expires, retry the document in Knowledge. Partial chunks remain unavailable to chat, and a retry replaces the failed generation. This MVP has no durable background queue. To replay the bounded local mixed-load check, run `npm run test:ingestion -- --max-source` and `npm run test:chat` in separate terminals against the same warm services; both suites must pass. This is a single smoke run, not a capacity benchmark. Request ID, save, delivery, and retry handling are documented in [docs/OPERATIONS.md](docs/OPERATIONS.md).
 
 ## Local-only boundary
 

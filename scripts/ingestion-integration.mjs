@@ -3,6 +3,7 @@ import { execFileSync } from "node:child_process";
 const maxSourceBytes = 102400;
 const zeroVector = "[" + new Array(1024).fill("0").join(",") + "]";
 const encoder = new TextEncoder();
+const maxSourceMode = process.argv.includes("--max-source");
 
 function getRuntimeStatus() {
   const command = process.platform === "win32" ? "cmd.exe" : "npx";
@@ -143,6 +144,19 @@ function vectorDimension(value) {
   return trimmed.slice(1, -1).split(",").filter(Boolean).length;
 }
 
+function maxSourceFixture(endFact) {
+  const prefix = "Northstar Bikes ships in the contiguous United States. Standard shipping costs $8. Orders of $100 or more ship free. ";
+  const targetPrefixBytes = maxSourceBytes - encoder.encode(endFact).byteLength;
+  assert(encoder.encode(prefix).byteLength < targetPrefixBytes, "max-source fixture prefix is too large");
+  const filler = "Warehouse packing reference. ";
+  let body = prefix;
+  while (encoder.encode(body).byteLength < targetPrefixBytes) body += filler;
+  body = body.slice(0, targetPrefixBytes);
+  const bytes = encoder.encode(body + endFact);
+  assert(bytes.byteLength === maxSourceBytes, "max-source fixture was not exactly 100 KiB");
+  return bytes;
+}
+
 async function main() {
   const runtime = getRuntimeStatus();
   const apiUrl = statusValue(runtime, "API_URL");
@@ -172,7 +186,7 @@ async function main() {
     assert(typeof botId === "string", "create-bot did not return a bot id.");
 
     const endFact = "END_FACT: Northstar support is available Monday through Friday from 09:00 to 17:00 UTC.";
-    const txtBytes = encoder.encode(
+    const txtBytes = maxSourceMode ? maxSourceFixture(endFact) : encoder.encode(
       "Northstar Bikes ships in the contiguous United States. Standard shipping costs $8. " +
       "Orders of $100 or more ship free. " + "多言語の背景情報です。🚲 ".repeat(80) + endFact,
     );
@@ -304,7 +318,7 @@ async function main() {
     const repeatedDelete = await callJson(apiUrl, anonKey, "delete-document", ownerToken, { document_id: txtDocument.id });
     assert(repeatedDelete.response.status === 200 && repeatedDelete.body.already_deleted === true, "repeated delete was not idempotent.");
 
-    console.log("ingestion integration passed");
+    console.log("ingestion integration passed" + (maxSourceMode ? " (max-source)" : ""));
   } finally {
     await removeStorage(apiUrl, serviceRoleKey, storagePaths);
     if (foreignId) await deleteUser(apiUrl, serviceRoleKey, foreignId);

@@ -64,7 +64,7 @@ async function embed(values) {
   return validateEmbeddings(await readJson(response, "Ollama embedding request failed"), values.length);
 }
 
-async function streamChat(model, messages) {
+async function streamChat(model, messages, decodeOllamaStream) {
   const started = Date.now();
   const response = await fetch(ollamaUrl + "/api/chat", {
     method: "POST",
@@ -81,52 +81,8 @@ async function streamChat(model, messages) {
   });
   assert(response.ok && response.body, "Ollama chat request failed.");
 
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = "";
   let answer = "";
-  let sawDone = false;
-  try {
-    while (!sawDone) {
-      const { value, done } = await reader.read();
-      if (done) break;
-      buffer += decoder.decode(value, { stream: true });
-      const lines = buffer.split("\n");
-      buffer = lines.pop() ?? "";
-      for (const line of lines) {
-        if (!line.trim()) continue;
-        let body;
-        try {
-          body = JSON.parse(line);
-        } catch {
-          throw new Error("Ollama returned malformed streaming data.");
-        }
-        if (body.error) throw new Error("Ollama provider returned an error.");
-        answer += String(body.message?.content ?? body.response ?? "");
-        if (body.done) {
-          if (body.done_reason === "length") throw new Error("Ollama answer was truncated by the response length limit.");
-          sawDone = true;
-          break;
-        }
-      }
-    }
-    buffer += decoder.decode();
-    if (!sawDone && buffer.trim()) {
-      let body;
-      try {
-        body = JSON.parse(buffer);
-      } catch {
-        throw new Error("Ollama returned an incomplete streaming response.");
-      }
-      if (body.error) throw new Error("Ollama provider returned an error.");
-      answer += String(body.message?.content ?? body.response ?? "");
-      if (body.done && body.done_reason === "length") throw new Error("Ollama answer was truncated by the response length limit.");
-      sawDone = Boolean(body.done);
-    }
-    assert(sawDone, "Ollama stream ended before completion.");
-  } finally {
-    reader.releaseLock();
-  }
+  for await (const token of decodeOllamaStream(response.body)) answer += token;
   return { answer, elapsedMs: Date.now() - started };
 }
 
@@ -139,15 +95,16 @@ async function loadHelpers() {
   // The production helpers are Deno-compatible. Give their configurable AI module
   // an empty environment so this runner can use the host Ollama URL directly.
   if (!globalThis.Deno) globalThis.Deno = { env: { get: () => undefined } };
-  const [{ groundedContext }, { splitText }] = await Promise.all([
+  const [{ groundedContext }, { splitText }, { decodeOllamaStream }] = await Promise.all([
     import(new URL("../supabase/functions/_shared/grounding.ts", import.meta.url)),
     import(new URL("../supabase/functions/_shared/text.ts", import.meta.url)),
+    import(new URL("../supabase/functions/_shared/ollama-stream.ts", import.meta.url)),
   ]);
-  return { groundedContext, splitText };
+  return { groundedContext, splitText, decodeOllamaStream };
 }
 
 async function main() {
-  const { groundedContext, splitText } = await loadHelpers();
+  const { groundedContext, splitText, decodeOllamaStream } = await loadHelpers();
   const evaluation = JSON.parse(readFileSync(join(projectDirectory, "docs", "model-evaluation.json"), "utf8"));
   const questions = evaluation.questions;
   assert(Array.isArray(questions) && questions.length === 15, "Canonical evaluation must contain exactly 15 questions.");
@@ -190,7 +147,7 @@ async function main() {
   for (const model of chatModels) {
     const answers = [];
     for (const context of contexts) {
-      const result = await streamChat(model, context.messages);
+      const result = await streamChat(model, context.messages, decodeOllamaStream);
       answers.push({ question: context.question, elapsedMs: result.elapsedMs, answer: result.answer });
     }
     models.push({

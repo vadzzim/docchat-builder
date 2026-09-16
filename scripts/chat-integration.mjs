@@ -4,6 +4,7 @@ const encoder = new TextEncoder();
 const widgetOrigin = "http://127.0.0.1:3000";
 const embedOrigin = "http://localhost:3001";
 const password = "Local-only-DocChat-2026!";
+const requestIdPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 function getRuntimeStatus() {
   const command = process.platform === "win32" ? "cmd.exe" : "npx";
@@ -213,6 +214,16 @@ function tokenText(result) {
     .join("");
 }
 
+function responseRequestId(response) {
+  const requestId = response.headers.get("x-request-id") ?? "";
+  assert(requestIdPattern.test(requestId), "Chat response did not include a UUID request ID.");
+  return requestId;
+}
+
+function eventRequestId(result) {
+  return result.events?.find((event) => typeof event.data?.request_id === "string")?.data?.request_id ?? "";
+}
+
 async function main() {
   const runtime = getRuntimeStatus();
   const apiUrl = statusValue(runtime, "API_URL");
@@ -289,12 +300,14 @@ async function main() {
     storagePaths.add(uploaded.body.document.storage_path);
     const processed = await callJson(apiUrl, anonKey, "process-document", ownerToken, { document_id: documentId });
     assert(processed.response.status === 200 && processed.body.status === "ready", "Chat fixture source did not become ready.");
+    responseRequestId(processed.response);
 
     const ownerAnswer = await callChat(apiUrl, anonKey, ownerToken, {
       bot_id: botId,
       message: "What is the standard shipping cost?",
     });
     const ownerDone = doneEvent(ownerAnswer);
+    assert(eventRequestId(ownerAnswer) === responseRequestId(ownerAnswer.response), "Owner chat request ID was not correlated between SSE and HTTP.");
     assert(tokenText(ownerAnswer).includes("$8"), "Grounded owner answer omitted the source fact.");
     assert(Array.isArray(ownerDone.citations) && ownerDone.citations.length > 0, "Grounded owner answer did not include citations.");
     const ownerConversationId = ownerAnswer.events.find((event) => event.event === "meta")?.data?.conversation_id;
@@ -313,6 +326,7 @@ async function main() {
       message: "What is Northstar's phone number?",
     });
     const missingDone = doneEvent(missing);
+    assert(eventRequestId(missing) === responseRequestId(missing.response), "Missing-information chat request ID was not correlated.");
     const missingAnswer = tokenText(missing);
     assert(missingAnswer.trim().endsWith("I couldn't find that in the uploaded documents."), "Missing information did not end with the insufficient-information answer: " + JSON.stringify(missingAnswer));
     assert(!/\d/.test(missingAnswer), "Missing information invented a numeric phone detail: " + JSON.stringify(missingAnswer));
@@ -344,12 +358,14 @@ async function main() {
       message: "Can I return an unused accessory?",
     }, widgetOrigin);
     assert(crossVisitor.response.status === 404 && crossVisitor.body.code === "conversation_not_found", "Visitor B reused visitor A's conversation.");
+    responseRequestId(crossVisitor.response);
 
     const foreignOwner = await callChat(apiUrl, anonKey, foreignToken, {
       bot_id: botId,
       message: "What is the shipping cost?",
     });
     assert(foreignOwner.response.status === 404 && foreignOwner.body.code === "not_found", "A foreign owner accessed the bot.");
+    responseRequestId(foreignOwner.response);
 
     const usageBeforeInvalid = await readUsage(apiUrl, serviceRoleKey, ownerId);
     const invalid = await callChat(apiUrl, anonKey, ownerToken, {
@@ -357,6 +373,7 @@ async function main() {
       message: "x".repeat(1001),
     });
     assert(invalid.response.status === 400 && invalid.body.code === "validation_error", "An overlong chat question was accepted.");
+    responseRequestId(invalid.response);
     assert(await readUsage(apiUrl, serviceRoleKey, ownerId) === usageBeforeInvalid, "Rejected chat input consumed quota.");
 
     concurrencyScope = "chat:bot:" + botId;
@@ -379,6 +396,7 @@ async function main() {
       message: "What is the return window?",
     }, widgetOrigin);
     assert(concurrentRejected.response.status === 429 && concurrentRejected.body.code === "concurrency_limited", "Bot concurrency limit did not reject a seeded boundary request.");
+    responseRequestId(concurrentRejected.response);
     assert(await readUsage(apiUrl, serviceRoleKey, ownerId) === usageBeforeConcurrent, "Concurrency-rejected chat consumed quota.");
     for (const leaseId of concurrencyLeases.splice(0)) {
       const released = await adminRpc(apiUrl, serviceRoleKey, "release_rate_limit", { p_scope_key: concurrencyScope, p_lease_id: leaseId });
@@ -392,6 +410,7 @@ async function main() {
       message: "What email address can I use for support?",
     });
     assert(doneEvent(finalOwner).usage.monthly_used === 100, "The final free monthly request was not reserved.");
+    assert(eventRequestId(finalOwner) === responseRequestId(finalOwner.response), "Final owner chat request ID was not correlated.");
     const quotaVisitor = await callChat(apiUrl, anonKey, null, {
       bot_id: botId,
       session_token: visitorA,
@@ -400,6 +419,7 @@ async function main() {
       message: "What is the return period?",
     }, widgetOrigin);
     assert(quotaVisitor.response.status === 200 && quotaVisitor.events.some((event) => event.event === "error" && event.data.code === "monthly_quota_exhausted"), "Visitor chat did not share the exhausted owner quota.");
+    assert(eventRequestId(quotaVisitor) === responseRequestId(quotaVisitor.response), "Quota rejection request ID was not correlated.");
     assert(await readUsage(apiUrl, serviceRoleKey, ownerId) === 100, "Exhausted quota changed unexpectedly.");
 
     const disabled = await callJson(apiUrl, anonKey, "bot-settings", ownerToken, { bot_id: botId, public_enabled: false });
@@ -419,6 +439,7 @@ async function main() {
     const usageBeforeNoDocs = await readUsage(apiUrl, serviceRoleKey, ownerId);
     const noDocs = await callChat(apiUrl, anonKey, ownerToken, { bot_id: botId, message: "What is the shipping cost?" });
     assert(noDocs.response.status === 409 && noDocs.body.code === "no_ready_documents", "Chat proceeded without ready documents.");
+    responseRequestId(noDocs.response);
     assert(await readUsage(apiUrl, serviceRoleKey, ownerId) === usageBeforeNoDocs, "No-document rejection consumed quota.");
 
     console.log("chat integration passed");

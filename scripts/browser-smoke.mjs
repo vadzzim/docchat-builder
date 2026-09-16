@@ -435,11 +435,61 @@ async function main() {
     assert(visitorAuthorization === undefined, "visitor chat sent an owner Authorization header");
     await waitFor("shared owner and visitor usage", async () => (await readUsage(apiUrl, serviceRoleKey, ownerId)) === 2 ? 2 : 0, 30000);
 
+    const requestIdPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+    const interruptedMessage = "What is the standard shipping cost? Please include the delivery time.";
+    let interruptedConversationId = "";
+    let interruptedRequestId = "";
+    let interruptedMetaRequestId = "";
+    await externalPage.route("**/functions/v1/chat", async (route) => {
+      if (route.request().method() === "OPTIONS") {
+        await route.continue();
+        return;
+      }
+      const actual = await route.fetch();
+      const body = (await actual.body()).toString("utf8");
+      const metaMatch = body.match(/event: meta\r?\ndata: ([^\r\n]+)/);
+      if (metaMatch) {
+        try {
+          const meta = JSON.parse(metaMatch[1]);
+          interruptedConversationId = typeof meta.conversation_id === "string" ? meta.conversation_id : "";
+          interruptedMetaRequestId = typeof meta.request_id === "string" ? meta.request_id : "";
+        } catch {
+          interruptedConversationId = "";
+          interruptedMetaRequestId = "";
+        }
+      }
+      interruptedRequestId = actual.headers()["x-request-id"] ?? "";
+      assert(requestIdPattern.test(interruptedRequestId), "saved chat response did not return a UUID request ID");
+      assert(interruptedMetaRequestId === interruptedRequestId, "saved chat SSE metadata did not match its HTTP request ID");
+      const eventBlocks = body.split(/\r?\n\r?\n/);
+      assert(eventBlocks.some((block) => /^event: done\r?\n/m.test(block)), "saved chat upstream response did not contain done before the test stripped it");
+      const interruptedBody = eventBlocks.filter((block) => !/^event: done\r?\n/m.test(block)).join("\n\n");
+      await route.fulfill({ response: actual, body: interruptedBody });
+    });
+    await widgetInput.fill(interruptedMessage);
+    await widget.getByRole("button", { name: "Send" }).click();
+    const interruptedAlert = widget.locator('p[role="alert"]').filter({ hasText: "ended before the answer was complete" }).first();
+    await waitForVisible(interruptedAlert, "saved chat with a stripped done event did not surface", maxProcessingMilliseconds);
+    await waitForVisible(widgetLog.getByText("Incomplete response. Save status is unknown.", { exact: true }), "saved chat was not marked with neutral unknown-save copy", 30000);
+    assert((await textOf(interruptedAlert)).includes(interruptedRequestId), "interrupted saved chat did not show its request ID");
+    assert(requestIdPattern.test(interruptedRequestId) && requestIdPattern.test(interruptedConversationId), "interrupted saved chat metadata was incomplete");
+    await waitFor("interrupted chat persisted despite lost done event", async () => {
+      const rows = await adminSelect(apiUrl, serviceRoleKey, "messages", {
+        select: "role,content",
+        conversation_id: "eq." + interruptedConversationId,
+        order: "message_order.asc",
+      });
+      const userIndex = rows.findIndex((row) => row.role === "user" && row.content === interruptedMessage);
+      return userIndex >= 0 && rows[userIndex + 1]?.role === "assistant" && String(rows[userIndex + 1].content).trim().length > 0 ? 1 : 0;
+    }, maxProcessingMilliseconds);
+    await externalPage.unroute("**/functions/v1/chat");
+
     await externalPage.route("**/functions/v1/chat", async (route) => {
       const corsHeaders = {
         "Access-Control-Allow-Origin": appOrigin,
         "Access-Control-Allow-Methods": "POST, OPTIONS",
         "Access-Control-Allow-Headers": "content-type",
+        "Access-Control-Expose-Headers": "X-Request-Id",
       };
       if (route.request().method() === "OPTIONS") {
         await route.fulfill({ status: 204, headers: corsHeaders });
@@ -447,8 +497,8 @@ async function main() {
       }
       await route.fulfill({
         status: 200,
-        headers: { ...corsHeaders, "Content-Type": "text/event-stream; charset=utf-8", "Cache-Control": "no-cache" },
-        body: "event: meta\ndata: {\"conversation_id\":\"00000000-0000-0000-0000-000000000001\"}\n\nevent: token\ndata: {\"token\":\"Partial response\"}\n\n",
+        headers: { ...corsHeaders, "Content-Type": "text/event-stream; charset=utf-8", "Cache-Control": "no-cache", "X-Request-Id": "33333333-3333-4333-8333-333333333333" },
+        body: "event: meta\ndata: {\"conversation_id\":\"00000000-0000-4000-8000-000000000001\",\"request_id\":\"33333333-3333-4333-8333-333333333333\"}\n\nevent: token\ndata: {\"token\":\"Partial response\"}\n\n",
       });
     });
     await widgetInput.fill("What are support hours?");
@@ -457,7 +507,8 @@ async function main() {
     await waitForVisible(transportAlert, "visitor transport failure did not surface", 30000);
     assert((await textOf(transportAlert)).includes("ended before the answer was complete"), "truncated visitor stream error was unclear");
     await waitForVisible(widgetLog.locator("p").filter({ hasText: "Partial response" }).first(), "truncated visitor token was not rendered", 30000);
-    await waitForVisible(widgetLog.getByText("Incomplete response. Try again.", { exact: true }), "truncated visitor stream was marked complete", 30000);
+    await waitForVisible(widgetLog.getByText("Incomplete response. Save status is unknown.", { exact: true }).last(), "truncated visitor stream was marked complete", 30000);
+    assert((await textOf(transportAlert)).includes("33333333-3333-4333-8333-333333333333"), "truncated visitor stream did not show its request ID");
     await externalPage.unroute("**/functions/v1/chat");
 
     await setPublicToggle(ownerPage, false);
