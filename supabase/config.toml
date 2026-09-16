@@ -1,0 +1,30 @@
+project_id = "docchat-local"
+
+[api]
+port = 55321
+
+[db]
+port = 55322
+shadow_port = 55320
+
+[studio]
+port = 55323
+
+[inbucket]
+port = 55324
+
+[storage]
+file_size_limit = "100KiB"
+
+[auth]
+site_url = "http://localhost:3000"
+additional_redirect_urls = ["http://127.0.0.1:3000/**"]
+
+[auth.email]
+enable_signup = true
+enable_confirmations = true
+
+[functions.create-bot]
+verify_jwt = false
+[functions.bot-settings]
+verify_jwt = false
