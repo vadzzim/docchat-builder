@@ -58,6 +58,9 @@ export function randomToken(byteLength = 32): string {
 }
 
 export function clientIp(request: Request): string {
-  const forwarded = request.headers.get("x-forwarded-for")?.split(",")[0]?.trim();
-  return forwarded || request.headers.get("x-real-ip")?.trim() || "unknown";
+  // Local Supabase Kong overwrites x-real-ip with the connected address. Do
+  // not trust the client-controlled x-forwarded-for chain, which would let a
+  // caller rotate public-session rate-limit keys. A deployed proxy must keep
+  // the same trusted-proxy invariant before forwarding this header.
+  return request.headers.get("x-real-ip")?.trim() || "unknown";
 }

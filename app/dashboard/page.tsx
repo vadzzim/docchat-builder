@@ -45,6 +45,7 @@ type Usage = {
 type BotResponse = { bot?: Bot };
 type MockBillingResponse = { mock?: boolean; charged?: boolean; plan?: Plan; message?: string };
 type ProcessResponse = { document_id?: string; status?: DocumentRow["status"]; chunk_count?: number; idempotent?: boolean };
+type DeleteBotResponse = { bot_id?: string; deleted?: boolean; already_deleted?: boolean; storage_removed?: boolean | null; cleanup_pending?: boolean; message?: string };
 
 function monthStartUtc(): string {
   const now = new Date();
@@ -137,6 +138,8 @@ export default function DashboardPage() {
   const [snippetNotice, setSnippetNotice] = useState<string | null>(null);
   const [billingBusy, setBillingBusy] = useState(false);
   const [billingNotice, setBillingNotice] = useState<Notice>(null);
+  const [deleteBotBusy, setDeleteBotBusy] = useState(false);
+  const [deleteBotNotice, setDeleteBotNotice] = useState<Notice>(null);
 
   const loadUsage = useCallback(async (activeSession: Session) => {
     const [accountResult, usageResult] = await Promise.all([
@@ -337,6 +340,37 @@ export default function DashboardPage() {
       setBillingNotice({ kind: "error", text: error instanceof Error ? error.message : "Your mock plan could not be changed." });
     } finally {
       setBillingBusy(false);
+    }
+  }
+
+  async function deleteBot() {
+    if (!session || !bot || deleteBotBusy) return;
+    const confirmed = window.confirm(
+      `Delete ${bot.name}? This permanently removes the bot, its source documents, visitor sessions, and chat history. Original source files are deleted now or queued for cleanup. Your account remains.`,
+    );
+    if (!confirmed) return;
+    setDeleteBotBusy(true);
+    setDeleteBotNotice(null);
+    try {
+      const result = await callEdgeFunction<DeleteBotResponse>("delete-bot", session, { bot_id: bot.id });
+      if (!result.response.ok || result.data.deleted !== true) {
+        const code = edgeCode(result.data);
+        throw new Error(code === "not_found" ? "Bot not found." : edgeError(result.data, "Your bot could not be deleted."));
+      }
+      setBot(null);
+      setDocuments([]);
+      setConversations([]);
+      setTab("knowledge");
+      setNotice({
+        kind: "success",
+        text: result.data.message ?? (result.data.storage_removed === false
+          ? "Your bot was deleted. Source-file cleanup is pending and will be retried."
+          : "Your bot and its source files were deleted. Your account remains active."),
+      });
+    } catch (error) {
+      setDeleteBotNotice({ kind: "error", text: error instanceof Error ? error.message : "Your bot could not be deleted." });
+    } finally {
+      setDeleteBotBusy(false);
     }
   }
 
@@ -652,6 +686,7 @@ export default function DashboardPage() {
                   <aside className="space-y-5">
                     <Card className="p-5"><h2 className="font-semibold text-ink">Embed your bot</h2><p className="mt-2 text-sm leading-6 text-slate-500">After enabling public chat, place this snippet on an allowed website.</p><textarea readOnly aria-label="Embed snippet" className="mt-4 min-h-28 w-full resize-y rounded-xl bg-slate-50 px-3 py-2.5 font-mono text-xs leading-5 text-slate-600 outline-none ring-1 ring-slate-200 focus:ring-2 focus:ring-lilac" value={embedSnippet} onFocus={(event) => event.currentTarget.select()} /><div className="mt-3 flex items-center gap-3"><Button type="button" variant="secondary" onClick={() => void copyEmbedSnippet()} disabled={!embedSnippet}>Copy snippet</Button>{snippetNotice && <span className="text-xs text-slate-500" role="status">{snippetNotice}</span>}</div><p className="mt-4 text-xs leading-5 text-slate-500">The loader requests a short-lived visitor session from the embedding website. It does not need an owner login or a browser secret.</p></Card>
                     <Card className="p-5"><h2 className="font-semibold text-ink">Ready when you are</h2><p className="mt-2 text-sm leading-6 text-slate-500">Keep public chat off while you test. When you publish, only the website origins you list can request a visitor session.</p></Card>
+                    <Card className="border-rose-200 p-5 ring-1 ring-rose-100"><h2 className="font-semibold text-rose-900">Delete bot</h2><p className="mt-2 text-sm leading-6 text-rose-800">Permanently remove this bot, its documents, visitor sessions, and chat history. Your account stays active.</p>{deleteBotNotice && <div className="mt-4 rounded-xl bg-rose-50 px-3 py-2.5 text-sm leading-5 text-rose-700" role="alert">{deleteBotNotice.text}</div>}<Button type="button" variant="secondary" className="mt-5 border-rose-200 text-rose-700 hover:bg-rose-50" onClick={() => void deleteBot()} disabled={deleteBotBusy || settingsBusy || billingBusy}>{deleteBotBusy ? "Deleting bot…" : "Delete bot"}</Button></Card>
                   </aside>
                 </div>
               </section>

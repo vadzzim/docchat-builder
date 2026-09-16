@@ -4,6 +4,7 @@ node_modules/
 *.tsbuildinfo
 .env.local
 .env.*.local
+.env.functions.local
 supabase/.temp/
 supabase/.branches/
 playwright-report/
