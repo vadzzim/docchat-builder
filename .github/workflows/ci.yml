@@ -190,7 +190,7 @@ jobs:
           app_pid=$!
           pnpm run demo >test-results/demo.log 2>&1 &
           demo_pid=$!
-          for url in http://127.0.0.1:3000/auth http://127.0.0.1:3001/; do
+          for url in http://127.0.0.1:3000/auth 'http://127.0.0.1:3001/?bot_id=ci-health-check'; do
             for attempt in $(seq 1 60); do
               if curl --silent --fail "$url" >/dev/null; then break; fi
               if [[ "$attempt" == 60 ]]; then exit 1; fi
@@ -214,5 +214,4 @@ jobs:
           path: |
             test-results/runtime-manifest.json
             test-results/ci-command-results.json
-            test-results/*.log
           if-no-files-found: ignore
