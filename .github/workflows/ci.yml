@@ -77,7 +77,6 @@ jobs:
           path: |
             test-results/runtime-manifest.json
             test-results/ci-command-results.json
-            test-results/*.log
           if-no-files-found: ignore
 
   local-integration:
@@ -215,4 +214,5 @@ jobs:
           path: |
             test-results/runtime-manifest.json
             test-results/ci-command-results.json
+            test-results/*.log
           if-no-files-found: ignore
